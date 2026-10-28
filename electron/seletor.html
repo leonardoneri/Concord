@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Compartilhar tela</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      display: flex;
+      flex-direction: column;
+      font: 14px/1.4 "gg sans", "Noto Sans", "Segoe UI", system-ui, sans-serif;
+      color: #dbdee1;
+      background: #313338;
+    }
+    header { padding: 20px 24px 0; }
+    h1 { margin: 0 0 12px; font-size: 20px; color: #f2f3f5; }
+    .abas { display: flex; gap: 16px; border-bottom: 1px solid #3f4147; }
+    .abas button {
+      font: inherit;
+      font-weight: 600;
+      color: #949ba4;
+      background: none;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      padding: 8px 2px;
+      cursor: pointer;
+    }
+    .abas button.ativa { color: #f2f3f5; border-color: #5865f2; }
+    .grade {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 24px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      align-content: start;
+    }
+    .fonte {
+      background: #2b2d31;
+      border: 2px solid transparent;
+      border-radius: 8px;
+      padding: 8px;
+      cursor: pointer;
+    }
+    .fonte:hover { background: #35373c; }
+    .fonte.escolhida { border-color: #5865f2; }
+    .fonte img.mini { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; border-radius: 4px; display: block; }
+    .fonte .nome { display: flex; align-items: center; gap: 6px; margin-top: 6px; overflow: hidden; }
+    .fonte .nome span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fonte .nome img { width: 16px; height: 16px; flex: none; }
+    footer {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 24px;
+      background: #2b2d31;
+    }
+    footer label { flex: 1; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+    footer small { color: #949ba4; }
+    footer button {
+      font: inherit;
+      font-weight: 600;
+      border: 0;
+      border-radius: 4px;
+      padding: 10px 20px;
+      cursor: pointer;
+      color: #fff;
+      background: #5865f2;
+    }
+    footer button:disabled { opacity: .5; cursor: not-allowed; }
+    footer button.cancelar { background: none; color: #dbdee1; }
+    footer button.cancelar:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Compartilhar tela</h1>
+    <div class="abas">
+      <button data-aba="janelas" class="ativa">Aplicativos</button>
+      <button data-aba="telas">Telas inteiras</button>
+    </div>
+  </header>
+  <div class="grade" id="grade"></div>
+  <footer>
+    <label id="label-audio" hidden>
+      <input type="checkbox" id="audio">
+      <span>Incluir som do PC <small>(a galera pode ouvir o eco da própria voz)</small></span>
+    </label>
+    <span style="flex:1" id="espaco"></span>
+    <button class="cancelar" id="cancelar">Cancelar</button>
+    <button id="compartilhar" disabled>Ao vivo</button>
+  </footer>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    let fontes = [];
+    let aba = 'janelas';
+    let escolhida = null;
+
+    function render() {
+      const lista = fontes.filter((f) => (aba === 'telas') === f.tela);
+      $('#grade').replaceChildren(...lista.map((f) => {
+        const card = document.createElement('div');
+        card.className = 'fonte' + (f.id === escolhida ? ' escolhida' : '');
+        const mini = document.createElement('img');
+        mini.className = 'mini';
+        mini.src = f.miniatura;
+        const nome = document.createElement('div');
+        nome.className = 'nome';
+        if (f.icone) {
+          const ic = document.createElement('img');
+          ic.src = f.icone;
+          nome.append(ic);
+        }
+        const texto = document.createElement('span');
+        texto.textContent = f.nome;
+        nome.append(texto);
+        card.append(mini, nome);
+        card.onclick = () => { escolhida = f.id; $('#compartilhar').disabled = false; render(); };
+        card.ondblclick = compartilhar;
+        return card;
+      }));
+    }
+
+    function compartilhar() {
+      if (escolhida) window.seletor.escolher({ id: escolhida, audio: $('#audio').checked });
+    }
+
+    document.querySelectorAll('.abas button').forEach((b) => {
+      b.onclick = () => {
+        aba = b.dataset.aba;
+        document.querySelectorAll('.abas button').forEach((x) => x.classList.toggle('ativa', x === b));
+        render();
+      };
+    });
+    $('#compartilhar').onclick = compartilhar;
+    $('#cancelar').onclick = () => window.seletor.escolher(null);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.seletor.escolher(null); });
+
+    window.seletor.aoReceber((dados) => {
+      fontes = dados.fontes;
+      $('#label-audio').hidden = !dados.audioDisponivel;
+      $('#espaco').hidden = dados.audioDisponivel;
+      if (!fontes.some((f) => !f.tela)) aba = 'telas';
+      document.querySelectorAll('.abas button').forEach((x) => x.classList.toggle('ativa', x.dataset.aba === aba));
+      render();
+    });
+  </script>
+</body>
+</html>

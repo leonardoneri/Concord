@@ -1,0 +1,60 @@
+{
+  "name": "amiguinhos-gamer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chat, chamada de voz, vídeo e compartilhamento de tela para os amigos",
+  "author": "Leonardo",
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "servidor": "node server.js",
+    "dev": "node --watch server.js",
+    "dist": "electron-builder --win --publish never",
+    "publicar": "electron-builder --win --publish always"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11",
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "electron": "^45.1.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.amiguinhosgamer.app",
+    "productName": "Amiguinhos Gamer",
+    "files": [
+      "server.js",
+      "public/**",
+      "electron/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "electron/icone.png",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "shortcutName": "Amiguinhos Gamer",
+      "artifactName": "AmiguinhosGamer-Setup.exe"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "leonardoneri",
+        "repo": "amiguinhos-gamer",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

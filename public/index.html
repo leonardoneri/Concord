@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Amiguinhos Gamer</title>
+  <link rel="icon" href="icone.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="login">
+    <form id="form-login" class="cartao">
+      <h1>Boas-vindas de volta!</h1>
+      <p class="sub">Que bom te ver de novo. Bora jogar?</p>
+      <label>Nome de exibição <span class="req">*</span>
+        <input id="nome" maxlength="32" autocomplete="nickname" required autofocus>
+      </label>
+      <label>Senha do servidor
+        <input id="senha" type="password" autocomplete="current-password" placeholder="Deixe vazio se não tiver">
+      </label>
+      <button type="submit" class="btn-primario">Entrar</button>
+      <p id="erro-login"></p>
+      <button type="button" class="btn-link trocar-servidor" hidden>Trocar de servidor</button>
+    </form>
+  </div>
+
+  <div id="app" hidden>
+    <nav id="rail">
+      <div class="rail-item ativo" title="Amiguinhos Gamer">
+        <span class="pill"></span>
+        <div class="icone-servidor">AG</div>
+      </div>
+      <div class="rail-sep"></div>
+      <button class="rail-botao btn-convidar" title="Convidar amigos" data-icone="convidar"></button>
+      <button class="rail-botao trocar-servidor" title="Trocar de servidor" data-icone="sair" hidden></button>
+    </nav>
+
+    <aside id="sidebar">
+      <header class="servidor-cab">
+        <span>Amiguinhos Gamer</span>
+        <button class="btn-icone btn-convidar" title="Convidar amigos" data-icone="convidar"></button>
+      </header>
+
+      <div class="lista-canais">
+        <div class="categoria" data-lista="canais-texto"><span data-icone="seta"></span>Canais de texto</div>
+        <ul id="canais-texto"></ul>
+        <div class="categoria" data-lista="canais-voz"><span data-icone="seta"></span>Canais de voz</div>
+        <ul id="canais-voz"></ul>
+      </div>
+
+      <div id="painel-voz" hidden>
+        <div class="linha-voz">
+          <div class="info-voz">
+            <span class="conectado"><span data-icone="sinal"></span>Voz conectada</span>
+            <span id="nome-canal-voz"></span>
+          </div>
+          <button class="btn-icone btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
+        </div>
+        <div class="botoes-voz">
+          <button class="btn-camera" title="Ligar câmera" data-icone="camera"><span>Vídeo</span></button>
+          <button class="btn-tela" title="Compartilhar tela" data-icone="tela"><span>Tela</span></button>
+        </div>
+      </div>
+
+      <div class="painel-usuario">
+        <div class="eu">
+          <span id="meu-avatar"></span>
+          <div class="eu-txt">
+            <span id="meu-nome"></span>
+            <span class="status">Online</span>
+          </div>
+        </div>
+        <button class="btn-icone btn-mudo" title="Silenciar (Ctrl+Shift+M)"></button>
+        <button class="btn-icone btn-surdo" title="Desativar áudio (Ctrl+Shift+D)"></button>
+        <button class="btn-icone" id="btn-config" title="Configurações" data-icone="config"></button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topo">
+        <button id="btn-menu" class="btn-icone" title="Canais">☰</button>
+        <span id="icone-canal"></span>
+        <span id="titulo-canal"></span>
+        <span id="topico"></span>
+        <div class="topo-acoes">
+          <button id="btn-membros" class="btn-icone ativo" title="Lista de membros" data-icone="membros"></button>
+        </div>
+      </header>
+
+      <div class="corpo">
+        <section id="view-texto">
+          <div id="mensagens"></div>
+          <form id="form-msg">
+            <div class="caixa-msg">
+              <button type="button" class="mais" id="btn-anexar" title="Enviar imagem (ou cole com Ctrl+V)" data-icone="mais"></button>
+              <input type="file" id="input-arquivo" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+              <input id="input-msg" maxlength="2000" autocomplete="off">
+            </div>
+            <div id="digitando"></div>
+          </form>
+        </section>
+
+        <section id="view-voz" hidden>
+          <div id="grid"></div>
+          <div class="controles-chamada">
+            <button class="btn-redondo btn-camera" title="Câmera" data-icone="camera"></button>
+            <button class="btn-redondo btn-tela" title="Compartilhar tela" data-icone="tela"></button>
+            <button class="btn-redondo btn-mudo" title="Silenciar"></button>
+            <button class="btn-redondo perigo btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
+          </div>
+        </section>
+
+        <aside id="membros">
+          <h3 id="titulo-online">Online</h3>
+          <ul id="online"></ul>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <div id="modal-config" class="modal" hidden>
+    <div class="modal-caixa">
+      <header>
+        <h2>Configurações de voz e vídeo</h2>
+        <button class="btn-icone" id="btn-fechar-config" title="Fechar" data-icone="fechar"></button>
+      </header>
+      <label>Dispositivo de entrada (microfone)<select id="cfg-mic"></select></label>
+      <label>Dispositivo de saída<select id="cfg-saida"></select></label>
+      <label>Câmera<select id="cfg-cam"></select></label>
+      <div class="linha-cfg">
+        <label>Qualidade da tela
+          <select id="cfg-resolucao">
+            <option value="720">720p</option>
+            <option value="1080">1080p</option>
+            <option value="original">Original (1440p/4K)</option>
+          </select>
+        </label>
+        <label>FPS da tela
+          <select id="cfg-fps">
+            <option value="30">30 fps</option>
+            <option value="60">60 fps</option>
+          </select>
+        </label>
+      </div>
+      <p class="dica-cfg">Mais qualidade e fps gastam mais internet de quem transmite. Dá pra trocar no meio da transmissão.</p>
+      <button type="button" class="btn-link" id="btn-trocar-nome">Trocar meu nome</button>
+    </div>
+  </div>
+
+  <div id="modal-convite" class="modal" hidden>
+    <div class="modal-caixa">
+      <header>
+        <h2>Convidar amigos</h2>
+        <button class="btn-icone" id="btn-fechar-convite" title="Fechar" data-icone="fechar"></button>
+      </header>
+      <p id="convite-dica"></p>
+      <label>Mande este link pra galera
+        <div class="linha-copiar">
+          <input id="convite-link" readonly>
+          <button type="button" class="btn-primario" id="btn-copiar">Copiar</button>
+        </div>
+      </label>
+      <p id="convite-extra"></p>
+    </div>
+  </div>
+
+  <div id="audios" hidden></div>
+  <div id="toast" hidden></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
