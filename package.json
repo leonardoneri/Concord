@@ -1,5 +1,5 @@
 {
-  "name": "amiguinhos-gamer",
+  "name": "concord",
   "version": "1.0.0",
   "private": true,
   "description": "Chat, chamada de voz, vídeo e compartilhamento de tela para os amigos",
@@ -26,8 +26,8 @@
     "electron-builder": "^26.18.0"
   },
   "build": {
-    "appId": "com.amiguinhosgamer.app",
-    "productName": "Amiguinhos Gamer",
+    "appId": "com.leonardoneri.concord",
+    "productName": "Concord",
     "files": [
       "server.js",
       "public/**",
@@ -45,14 +45,14 @@
     },
     "nsis": {
       "oneClick": true,
-      "shortcutName": "Amiguinhos Gamer",
-      "artifactName": "AmiguinhosGamer-Setup.exe"
+      "shortcutName": "Concord",
+      "artifactName": "Concord-Setup.exe"
     },
     "publish": [
       {
         "provider": "github",
         "owner": "leonardoneri",
-        "repo": "amiguinhos-gamer",
+        "repo": "concord",
         "releaseType": "release"
       }
     ]

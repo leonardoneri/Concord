@@ -142,7 +142,7 @@ async function abrirConvite() {
   if (!link) {
     $('#convite-dica').textContent = 'Esse servidor só está acessível neste PC. Crie o servidor com "link pra amigos pela internet" marcado.';
   } else if (link.startsWith('https:')) {
-    $('#convite-dica').textContent = 'Funciona de qualquer lugar. Seu amigo pode colar no app Amiguinhos Gamer ou abrir direto no navegador (Chrome/Edge), sem instalar nada.';
+    $('#convite-dica').textContent = 'Funciona de qualquer lugar. Seu amigo pode colar no app Concord ou abrir direto no navegador (Chrome/Edge), sem instalar nada.';
   } else {
     $('#convite-dica').textContent = 'Esse link só funciona na mesma rede ou VPN (Radmin, Hamachi…) e precisa do app: pelo navegador o microfone não funciona em http.';
   }

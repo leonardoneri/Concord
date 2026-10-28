@@ -11,6 +11,18 @@ const LAUNCHER = path.join(dir, 'launcher.html');
 const ICONE = path.join(dir, 'icone.png');
 const arquivoConfig = path.join(app.getPath('userData'), 'config.json');
 
+// O app se chamava "Amiguinhos Gamer": traz a config, o histórico do chat e o nome salvo da pasta antiga
+function migrarPastaAntiga() {
+  const antiga = path.join(app.getPath('appData'), 'amiguinhos-gamer');
+  if (fs.existsSync(arquivoConfig) || !fs.existsSync(path.join(antiga, 'config.json'))) return;
+  for (const item of ['config.json', 'dados', 'bin', 'Local Storage']) {
+    try {
+      fs.cpSync(path.join(antiga, item), path.join(app.getPath('userData'), item), { recursive: true, force: false });
+    } catch {}
+  }
+}
+migrarPastaAntiga();
+
 function lerConfig() {
   try { return JSON.parse(fs.readFileSync(arquivoConfig, 'utf8')); } catch { return {}; }
 }
@@ -105,7 +117,7 @@ function criarJanela() {
     minWidth: 940,
     minHeight: 560,
     backgroundColor: '#313338',
-    title: 'Amiguinhos Gamer',
+    title: 'Concord',
     icon: ICONE,
     autoHideMenuBar: true,
     webPreferences: { preload: path.join(dir, 'preload.cjs') },

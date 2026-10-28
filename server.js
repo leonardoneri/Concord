@@ -237,6 +237,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const porta = Number(process.env.PORT) || 3000;
   const senha = process.env.SENHA || '';
   await iniciarServidor({ porta, senha });
-  console.log(`Amiguinhos Gamer rodando em http://localhost:${porta}`);
+  console.log(`Concord rodando em http://localhost:${porta}`);
   if (senha) console.log('Senha de entrada ativada.');
 }

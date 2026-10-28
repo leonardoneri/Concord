@@ -27,7 +27,7 @@ export function iniciarAtualizador({ janela, hospedando }) {
     const { response } = await dialog.showMessageBox(j, {
       type: 'info',
       title: 'Atualização disponível',
-      message: `A versão ${version} do Amiguinhos Gamer está pronta.`,
+      message: `A versão ${version} do Concord está pronta.`,
       detail: hospedando()
         ? 'Você está hospedando: a galera cai por alguns segundos e o link de convite muda. Se preferir, clique em "Depois" e ela instala quando você fechar o app.'
         : 'O app reinicia rapidinho. Se preferir, clique em "Depois" e ela instala quando você fechar o app.',

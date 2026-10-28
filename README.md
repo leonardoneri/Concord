@@ -1,16 +1,16 @@
-# 🎮 Amiguinhos Gamer
+# 🎮 Concord
 
-Um "Discord" caseiro pra jogar com os amigos: chat por canais, chamada de voz, câmera e compartilhamento de tela.
+O contrário do Discord: um app caseiro pra jogar com os amigos (o servidor da galera é o **Amiguinhos Gamer**): chat por canais, chamada de voz, câmera e compartilhamento de tela.
 
 ## Baixar
 
-**[⬇️ Baixar o Amiguinhos Gamer](https://github.com/leonardoneri/amiguinhos-gamer/releases/latest/download/AmiguinhosGamer-Setup.exe)**. Instale uma vez; depois o app avisa sozinho quando sai versão nova, e é só clicar em **Atualizar agora**.
+**[⬇️ Baixar o Concord](https://github.com/leonardoneri/concord/releases/latest/download/Concord-Setup.exe)**. Instale uma vez; depois o app avisa sozinho quando sai versão nova, e é só clicar em **Atualizar agora**.
 
 ## Passo a passo
 
 ### Quem cria o servidor (só uma pessoa)
 
-1. Instale e abra o **Amiguinhos Gamer** (link lá em cima).
+1. Instale e abra o **Concord** (link lá em cima).
 2. Clique em **Criar servidor e entrar**. Na primeira vez demora um pouco porque o app baixa o conector do link.
 3. Escolha seu nome.
 4. Clique no ícone de **Convidar** (bonequinho com +) e depois em **Copiar**. Mande o link no grupo.
@@ -21,7 +21,7 @@ Seu PC precisa ficar com o app aberto enquanto a galera usa. O link muda toda ve
 
 > **Opção 1, sem instalar nada:** abra o link que mandei no Chrome ou no Edge, escolha um nome e pronto. Quando entrar na chamada, permita o microfone.
 >
-> **Opção 2, com o app (melhor pra compartilhar tela):** instale o app por este link: https://github.com/leonardoneri/amiguinhos-gamer/releases/latest/download/AmiguinhosGamer-Setup.exe. Abra, cole o link em **Entrar com convite** e clique em **Entrar**.
+> **Opção 2, com o app (melhor pra compartilhar tela):** instale o app por este link: https://github.com/leonardoneri/concord/releases/latest/download/Concord-Setup.exe. Abra, cole o link em **Entrar com convite** e clique em **Entrar**.
 >
 > Se aparecer "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo**. O aviso aparece porque o app não é assinado.
 
@@ -54,15 +54,15 @@ Da próxima vez, o app já lembra seu nome e tem um botão **Entrar de novo**.
 ```powershell
 npm install
 npm start                 # abre o app a partir do código
-npm run dist              # gera dist\AmiguinhosGamer-Setup.exe (só no seu PC, não publica)
+npm run dist              # gera dist\Concord-Setup.exe (só no seu PC, não publica)
 npm run publicar          # gera e publica no GitHub Releases (precisa do GH_TOKEN, veja abaixo)
 npm run servidor          # só o servidor (pra rodar numa VPS). Variáveis: PORT, SENHA, TURN_URL, TURN_USER, TURN_PASS
 npx electron scripts/gerar-icone.mjs   # regera o ícone
 ```
 
 - Os canais ficam em `CANAIS_TEXTO` e `CANAIS_VOZ` no `server.js`.
-- O histórico do chat de quem hospeda fica em `%APPDATA%\amiguinhos-gamer\dados\chat.db`, e as imagens em `dados\uploads`.
-- O link público usa o Quick Tunnel do Cloudflare (`cloudflared`, baixado pra `%APPDATA%\amiguinhos-gamer\bin`).
+- O histórico do chat de quem hospeda fica em `%APPDATA%\concord\dados\chat.db`, e as imagens em `dados\uploads`.
+- O link público usa o Quick Tunnel do Cloudflare (`cloudflared`, baixado pra `%APPDATA%\concord\bin`).
 - A chamada é P2P (mesh): funciona bem até umas 5 ou 6 pessoas com vídeo ou tela.
 
 ### Lançar uma atualização
