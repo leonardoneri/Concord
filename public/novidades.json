@@ -1,5 +1,15 @@
 [
   {
+    "versao": "1.0.12",
+    "itens": [
+      "Soundboard na chamada: botão 🎵 com 6 sons prontos e sons que vocês mesmos sobem pro servidor (até 7 segundos)",
+      "Testar microfone em Configurações → Voz e vídeo: barra que mexe quando você fala, mostra qual microfone está em uso e explica o que fazer se não funcionar",
+      "Quem fecha e abre o Concord não aparece mais duplicado na chamada",
+      "Tirando o destaque da transmissão, ela fica do mesmo tamanho dos blocos da galera",
+      "Ícone de configurações agora é uma engrenagem"
+    ]
+  },
+  {
     "versao": "1.0.11",
     "itens": [
       "Mostra o que cada um está jogando: \"Jogando X\" com o ícone do jogo na lista de membros e do lado do nome na chamada",
