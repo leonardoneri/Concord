@@ -729,6 +729,9 @@ function sincronizarPrefs() {
   }, 1000);
 }
 
+// Fechando ou recarregando a página: sai da sala na hora (senão os outros acham que é só uma queda e esperam)
+window.addEventListener('pagehide', () => { if (estado.voz) socket.emit('voz:sair'); });
+
 // Reconectou (ex.: queda de internet, servidor atualizando): entra de novo automaticamente
 socket.on('connect', () => { if (estado.eu) entrar(); });
 
@@ -769,23 +772,31 @@ function restaurarVoz(voz) {
 let membrosVoz = new Set();
 const sumidos = new Map(); // id -> timeout: estava na call e sumiu da lista (pode estar só reconectando)
 const ESPERA_SUMIDO = 20_000;
+function tirarSumido(id) {
+  clearTimeout(sumidos.get(id));
+  sumidos.delete(id);
+  if (!estado.usuarios.some((x) => x.id === id && x.voz === estado.voz && !x.sumido)) fecharPeer(id);
+  estado.usuarios = estado.usuarios.filter((x) => !(x.id === id && x.sumido));
+  render();
+}
 socket.on('presenca', (lista) => {
   const antes = estado.usuarios;
   for (const id of [...peers.keys()]) {
     const u = lista.find((x) => x.id === id);
-    if (u?.voz === estado.voz) {
+    const conta = antes.find((x) => x.id === id)?.conta;
+    const voltouComOutraSessao = !u && conta != null && lista.some((x) => x.conta === conta && x.id !== id);
+    if (voltouComOutraSessao) {
+      clearTimeout(sumidos.get(id));
+      sumidos.delete(id);
+      fecharPeer(id);
+    } else if (u?.voz === estado.voz) {
       clearTimeout(sumidos.get(id));
       sumidos.delete(id);
     } else if (u || peers.get(id).pc.connectionState !== 'connected') {
       fecharPeer(id); // saiu da sala de verdade
     } else if (!sumidos.has(id)) {
       // sumiu mas a conexão direta continua: espera ele reconectar no servidor
-      sumidos.set(id, setTimeout(() => {
-        sumidos.delete(id);
-        if (!estado.usuarios.some((x) => x.id === id && x.voz === estado.voz && !x.sumido)) fecharPeer(id);
-        estado.usuarios = estado.usuarios.filter((x) => !(x.id === id && x.sumido));
-        render();
-      }, ESPERA_SUMIDO));
+      sumidos.set(id, setTimeout(() => tirarSumido(id), ESPERA_SUMIDO));
     }
   }
   // quem está reconectando continua aparecendo (e sendo ouvido) na chamada
@@ -2047,6 +2058,8 @@ function criarPeer(id) {
       ajustarBitrates();
       enviarPedido(id);
     }
+    // sumiu do servidor e agora a conexão direta também caiu: fechou o app, não está só reconectando
+    if (sumidos.has(id) && ['disconnected', 'failed', 'closed'].includes(pc.connectionState)) tirarSumido(id);
   };
   let reiniciou = false;
   pc.oniceconnectionstatechange = () => {
