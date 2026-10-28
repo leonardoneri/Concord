@@ -2207,7 +2207,7 @@ function renderGrid() {
 }
 
 function criarTile(d) {
-  const tile = el('div', `tile ${d.tipo}`);
+  const tile = el('div', `tile ${d.tipo}${d.local ? ' minha' : ''}`);
   tile.dataset.chave = d.chave;
   if (d.tipo === 'cam') tile.dataset.fala = d.u.id;
   const video = el('video');
@@ -2233,13 +2233,16 @@ function criarTile(d) {
     vol.ondblclick = (e) => e.stopPropagation();
     rotulo.append(vol);
   }
-  const cheia = el('button', 'btn-cheia');
-  cheia.title = 'Tela cheia';
-  cheia.append(icone('cheia'));
-  cheia.onclick = () => telaCheia(tile);
-  rotulo.append(cheia);
-
-  tile.ondblclick = () => telaCheia(tile);
+  // a própria transmissão em tela cheia vira um espelho infinito (e cobre o que você está transmitindo)
+  const minhaTela = d.local && d.tipo === 'tela';
+  if (!minhaTela) {
+    const cheia = el('button', 'btn-cheia');
+    cheia.title = 'Tela cheia';
+    cheia.append(icone('cheia'));
+    cheia.onclick = () => telaCheia(tile);
+    rotulo.append(cheia);
+    tile.ondblclick = () => telaCheia(tile);
+  }
   tile.onclick = (e) => { if (!e.target.closest('input, button')) focarTile(d.chave); };
   if (!d.local) tile.oncontextmenu = (e) => abrirMenuPessoa(d.u.id, e);
   return tile;
@@ -2247,7 +2250,7 @@ function criarTile(d) {
 
 function telaCheia(tile) {
   if (document.fullscreenElement) document.exitFullscreen();
-  else tile.requestFullscreen?.();
+  else if (!tile.matches('.tela.minha')) tile.requestFullscreen?.();
 }
 
 function atualizarTile(tile, d) {
