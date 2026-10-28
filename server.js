@@ -456,8 +456,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   const sala = (srv) => `s:${srv}`;
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
-  const publico = ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto }) =>
-    ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto });
+  const publico = ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo }) =>
+    ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo });
   // eu.servidor = id do servidor aberto, ou 'dm' vendo as conversas diretas
   function emitirPresenca() {
     const membrosDe = new Map();
@@ -616,6 +616,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         servidor: null, // servidor aberto na tela ('dm' = conversas diretas)
         status: STATUS.includes(conta.status) ? conta.status : 'online',
         statusTexto: conta.status_texto ?? '',
+        jogo: null,
         voz: null, // id do canal de voz
         mudo: false,
         surdo: false,
@@ -777,6 +778,18 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       texto = String(texto ?? '').replace(/[\p{C}]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 60);
       sql.trocarStatus.run(status, texto, u.conta);
       Object.assign(u, { status, statusTexto: texto });
+      emitirPresenca();
+      ack({});
+    });
+
+    // ---------- jogando agora (o app desktop detecta) ----------
+    quando('jogo', (u, jogo, ack) => {
+      const nome = typeof jogo?.nome === 'string' ? jogo.nome.replace(/[\p{C}]/gu, '').trim().slice(0, 60) : '';
+      // ícone pequeno do .exe; só PNG em data URL, sem nada que o navegador execute
+      const icone = typeof jogo?.icone === 'string' && jogo.icone.length < 12_000 && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(jogo.icone) ? jogo.icone : null;
+      const novo = nome ? { nome, icone } : null;
+      if (novo?.nome === u.jogo?.nome && novo?.icone === u.jogo?.icone) return ack({});
+      u.jogo = novo;
       emitirPresenca();
       ack({});
     });

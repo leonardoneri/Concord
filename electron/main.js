@@ -1,9 +1,10 @@
-import { app, BrowserWindow, Menu, desktopCapturer, globalShortcut, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, desktopCapturer, globalShortcut, ipcMain, nativeImage, session, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { iniciarAtualizador } from './atualizador.js';
+import { vigiarJogos } from './jogos.js';
 
 // Onde o Concord roda (VPS). O app abre direto nele; criar/entrar em servidores é feito lá dentro.
 const ENDERECO = 'https://152-67-40-158.sslip.io';
@@ -36,7 +37,19 @@ function criarJanela() {
     title: 'Concord',
     icon: ICONE,
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(dir, 'preload.cjs') },
+    show: !OCULTO,
+    // escondido na bandeja, a página continua rodando normal (chamada, atalhos, notificações)
+    webPreferences: { preload: path.join(dir, 'preload.cjs'), backgroundThrottling: false },
+  });
+
+  // desligando o PC: deixa fechar
+  janela.on('session-end', () => { saindo = true; });
+  // fechar (X) só esconde: o Concord continua rodando na bandeja, igual o Discord
+  janela.on('close', (e) => {
+    if (saindo) return;
+    e.preventDefault();
+    janela.hide();
+    avisarBandeja();
   });
 
   // links abrem no navegador padrão
@@ -58,6 +71,49 @@ function criarJanela() {
   });
 
   janela.loadURL(ENDERECO);
+}
+
+// ---------- bandeja do Windows (perto do relógio) ----------
+let tray = null;
+// aberto pelo Windows ao ligar o PC: começa só na bandeja
+const OCULTO = process.argv.includes('--oculto');
+const iniciaComWindows = () => app.getLoginItemSettings({ args: ['--oculto'] }).openAtLogin;
+function iniciarComWindows(ligar) {
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: ligar, args: ['--oculto'] });
+}
+let saindo = false; // true = fechar de verdade (menu "Sair", atualização, desligar o PC)
+app.on('before-quit', () => { saindo = true; });
+
+function mostrarJanela() {
+  if (!janela) return criarJanela();
+  if (janela.isMinimized()) janela.restore();
+  janela.show();
+  janela.focus();
+}
+
+function criarBandeja() {
+  tray = new Tray(nativeImage.createFromPath(ICONE).resize({ width: 32, height: 32 }));
+  tray.setToolTip('Concord');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Abrir o Concord', click: mostrarJanela },
+    { type: 'separator' },
+    { label: 'Abrir junto com o Windows', type: 'checkbox', checked: iniciaComWindows(), click: (item) => iniciarComWindows(item.checked) },
+    { type: 'separator' },
+    { label: 'Sair do Concord', click: () => app.quit() },
+  ]));
+  tray.on('click', mostrarJanela);
+}
+
+// Na primeira vez que fecha, explica onde o app foi parar
+function avisarBandeja() {
+  const marca = path.join(app.getPath('userData'), 'avisou-bandeja');
+  if (fs.existsSync(marca)) return;
+  try { fs.writeFileSync(marca, '1'); } catch {}
+  tray?.displayBalloon({
+    iconType: 'info',
+    title: 'O Concord continua aberto',
+    content: 'Ele fica aqui na bandeja, perto do relógio (a chamada continua). Pra fechar de vez: botão direito no ícone → Sair do Concord.',
+  });
 }
 
 // ---------- seletor de tela ----------
@@ -172,6 +228,11 @@ function configurarPtt(code) {
   return true;
 }
 
+// "Jogando X": o jogo aberto agora ({ nome, icone } ou null), e aviso quando muda
+let jogos = { atual: () => null };
+ipcMain.handle('desktop:jogo', () => jogos.atual());
+ipcMain.handle('desktop:mostrar', () => mostrarJanela());
+
 // Atalhos que funcionam mesmo com o jogo em foco (só enquanto está numa chamada)
 const ATALHOS_PADRAO = { mudo: 'Ctrl+Shift+M', surdo: 'Ctrl+Shift+D' };
 ipcMain.handle('desktop:atalhos', (e, cfg) => {
@@ -223,15 +284,20 @@ app.whenReady().then(() => {
     }
   });
 
+  // na primeira vez, já deixa abrindo junto com o Windows (escondido), igual o Discord; dá pra desligar na bandeja
+  const marca = path.join(app.getPath('userData'), 'configurou-inicio');
+  if (!fs.existsSync(marca)) {
+    iniciarComWindows(true);
+    try { fs.writeFileSync(marca, '1'); } catch {}
+  }
   criarJanela();
+  criarBandeja();
   iniciarAtualizador({ janela: () => janela });
+  jogos = vigiarJogos((jogo) => janela?.webContents.send('desktop:jogo', jogo));
 });
 
-app.on('second-instance', () => {
-  if (!janela) return;
-  if (janela.isMinimized()) janela.restore();
-  janela.focus();
-});
+// abriu o Concord de novo (atalho/menu iniciar): traz a janela que já está aberta, mesmo escondida na bandeja
+app.on('second-instance', () => mostrarJanela());
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   configurarPtt(null);

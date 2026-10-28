@@ -34,6 +34,7 @@ const ICONES = {
   tela: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
   desligar: '<path fill="currentColor" d="M3 15.5c5-5 13-5 18 0l-2.5 2.5-3.2-1.6v-2.8a10 10 0 0 0-6.6 0v2.8L5.5 18z"/>',
   config: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+  jogo: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><rect x="2" y="6" width="20" height="12" rx="4"/>',
   membros: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
   seta: '<path d="m6 9 6 6 6-6"/>',
   sinal: '<path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 4v16"/>',
@@ -212,6 +213,24 @@ window.addEventListener('blur', () => { if (!pttGlobal) apertarPtt(false); });
 // ---------- desktop ----------
 
 // Atualização do app já baixada: aparece o botão verde (igual o Discord); clicar reinicia atualizado
+// "Jogando X": o app desktop avisa quando um jogo abre/fecha
+let meuJogo = null;
+function mudouJogo(jogo) {
+  meuJogo = jogo ?? null;
+  if (estado.eu) socket.emit('jogo', meuJogo);
+}
+appDesktop?.jogo?.().then(mudouJogo);
+appDesktop?.aoJogo?.(mudouJogo);
+function iconeJogo(jogo) {
+  if (jogo.icone) {
+    const img = el('img', 'icone-jogo');
+    img.src = jogo.icone;
+    img.alt = '';
+    return img;
+  }
+  return icone('jogo', 'icone-jogo');
+}
+
 let atualizacaoPronta = null; // app desktop: versão nova já baixada
 let novaVersaoWeb = null; // servidor atualizado com a página aberta
 function mostrarAtualizacao(info) {
@@ -410,6 +429,7 @@ function entrar() {
     $('#meu-nome').textContent = res.nome;
     if (primeiraVez && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
     if (primeiraVez) setTimeout(() => mostrarNovidades(), 800);
+    if (meuJogo) socket.emit('jogo', meuJogo);
     const convite = conviteDaUrl();
     if (convite) {
       esquecerConviteDaUrl();
@@ -890,6 +910,11 @@ function renderCanais() {
     for (const u of estado.usuarios.filter((x) => x.voz === c.id)) {
       const m = el('li', 'usuario-voz');
       m.append(avatar(u), el('span', 'nome', u.nome));
+      if (u.jogo) {
+        const j = iconeJogo(u.jogo);
+        j.title = `Jogando ${u.jogo.nome}`;
+        m.append(j);
+      }
       m.onclick = (e) => {
         if (u.tela && u.voz === estado.voz) {
           e.stopPropagation();
@@ -923,13 +948,23 @@ function itemMembro(u, online) {
   linha.style.color = u.cor;
   if (perfilDe(u.nome)?.admin) linha.append(icone('coroa', 'coroa'));
   nome.append(linha);
+  if (online && u.jogo) {
+    const a = el('span', 'atividade jogando');
+    a.append(el('span', null, 'Jogando '), el('b', null, u.jogo.nome));
+    nome.append(a);
+  }
   if (u.voz) {
     const sala = canalPorId(u.voz)?.nome ?? 'outro servidor';
     nome.append(el('span', 'atividade', u.tela ? `Ao vivo em ${sala}` : `Em ${sala}`));
-  } else if (online && u.statusTexto) {
+  } else if (online && u.statusTexto && !u.jogo) {
     nome.append(el('span', 'atividade', u.statusTexto));
   }
   li.append(avatar(u, { status: online }), nome);
+  if (online && u.jogo) {
+    const j = iconeJogo(u.jogo);
+    j.title = `Jogando ${u.jogo.nome}`;
+    li.append(j);
+  }
   li.onclick = (e) => abrirPerfil(u.nome, e);
   if (online) li.oncontextmenu = (e) => abrirMenuPessoa(u.id, e);
   return li;
@@ -1561,6 +1596,7 @@ function notificar(m, mencao) {
     : m.servidor === estado.servidor.id ? `#${canalPorId(m.canal)?.nome}` : estado.servidores.find((x) => x.id === m.servidor)?.nome;
   const n = new Notification(`${m.autor} (${onde})`, { body: resumoMensagem(m.texto) });
   n.onclick = () => {
+    appDesktop?.mostrar?.(); // pode estar escondido na bandeja
     window.focus();
     irParaMensagem(m.servidor, m.canal, m.id);
   };
@@ -2322,12 +2358,15 @@ function criarTile(d) {
   }
   // a própria transmissão em tela cheia vira um espelho infinito (e cobre o que você está transmitindo)
   const minhaTela = d.local && d.tipo === 'tela';
-  if (!minhaTela) {
-    const cheia = el('button', 'btn-cheia');
+  const cheia = el('button', 'btn-cheia');
+  cheia.append(icone('cheia'));
+  rotulo.append(cheia);
+  if (minhaTela) {
+    cheia.disabled = true;
+    cheia.title = 'Não dá pra pôr a sua própria transmissão em tela cheia';
+  } else {
     cheia.title = 'Tela cheia';
-    cheia.append(icone('cheia'));
     cheia.onclick = () => telaCheia(tile);
-    rotulo.append(cheia);
     tile.ondblclick = () => telaCheia(tile);
   }
   tile.onclick = (e) => { if (!e.target.closest('input, button')) focarTile(d.chave); };
@@ -2339,6 +2378,10 @@ function telaCheia(tile) {
   if (document.fullscreenElement) document.exitFullscreen();
   else if (!tile.matches('.tela.minha')) tile.requestFullscreen?.();
 }
+// garantia: se por qualquer caminho a própria transmissão (ou o vídeo dela) for pra tela cheia, sai na hora
+document.addEventListener('fullscreenchange', () => {
+  if (document.fullscreenElement?.closest?.('.tela.minha')) document.exitFullscreen();
+});
 
 function atualizarTile(tile, d) {
   const video = tile.querySelector('video');

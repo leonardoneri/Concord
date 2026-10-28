@@ -9,4 +9,9 @@ contextBridge.exposeInMainWorld('desktop', {
   atualizacao: () => ipcRenderer.invoke('desktop:atualizacao'),
   aoAtualizacao: (cb) => ipcRenderer.on('desktop:atualizacao', (_e, info) => cb(info)),
   atualizar: () => ipcRenderer.invoke('desktop:atualizar'),
+  // jogo aberto agora ({ nome, icone } ou null) e aviso quando muda
+  jogo: () => ipcRenderer.invoke('desktop:jogo'),
+  aoJogo: (cb) => ipcRenderer.on('desktop:jogo', (_e, jogo) => cb(jogo)),
+  // traz a janela de volta da bandeja (ex.: clicou numa notificação)
+  mostrar: () => ipcRenderer.invoke('desktop:mostrar'),
 });

@@ -1,5 +1,14 @@
 [
   {
+    "versao": "1.0.11",
+    "itens": [
+      "Mostra o que cada um está jogando: \"Jogando X\" com o ícone do jogo na lista de membros e do lado do nome na chamada",
+      "Fechar no X deixa o Concord rodando na bandeja (perto do relógio), com a chamada continuando. Pra sair de vez: botão direito no ícone → Sair",
+      "Abre junto com o Windows, já escondido na bandeja (dá pra desligar no menu do ícone)",
+      "O botão de tela cheia da sua própria transmissão fica desativado"
+    ]
+  },
+  {
     "versao": "1.0.10",
     "itens": [
       "A chamada não cai mais quando o servidor é atualizado: a voz, câmera e tela continuam e tudo volta sozinho",
