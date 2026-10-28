@@ -171,58 +171,118 @@ $('#btn-copiar').onclick = async () => {
   setTimeout(() => { b.textContent = 'Copiar'; b.classList.remove('copiado'); }, 1500);
 };
 
-// ---------- login ----------
-// Identifica este navegador/app, pra reconexão não ser barrada como "nome repetido"
-const sessao = lerStorage('sessao', null) ?? crypto.getRandomValues(new Uint32Array(4)).join('-');
-salvarStorage('sessao', sessao);
+// ---------- login / conta ----------
+// O token da conta fica salvo neste navegador/app: entra sozinho da próxima vez
+let token = lerStorage('token', null);
+try { ['nome', 'senha', 'sessao'].forEach((k) => localStorage.removeItem(k)); } catch {} // sobras da versão sem conta
 
-$('#nome').value = lerStorage('nome', '');
-$('#senha').value = lerStorage('senha', '');
+let modoLogin = 'entrar';
+let pedeConvite = false;
 
-// Já entrou antes neste servidor: entra direto, sem mostrar a tela de login
-if ($('#nome').value) {
+function mostrarLogin(erro = '') {
+  $('#erro-login').textContent = erro;
+  $('#login').hidden = false;
+  $('#app').hidden = true;
+  if (!socket.connected) socket.connect();
+  socket.emit('servidor:info', (info) => {
+    pedeConvite = !!info?.pedeConvite;
+    trocarModoLogin(modoLogin);
+  });
+}
+
+function trocarModoLogin(modo) {
+  modoLogin = modo;
+  const criar = modo === 'criar';
+  $$('.abas-login button').forEach((b) => b.classList.toggle('ativa', b.dataset.modo === modo));
+  $$('.so-criar').forEach((e) => (e.hidden = !criar));
+  $('#campo-convite').hidden = !criar || !pedeConvite;
+  $('#convite').required = criar && pedeConvite;
+  $('#senha').autocomplete = criar ? 'new-password' : 'current-password';
+  $('#senha').minLength = criar ? 6 : 0;
+  $('#login-titulo').textContent = criar ? 'Criar uma conta' : 'Boas-vindas de volta!';
+  $('#login-sub').textContent = criar ? 'Rapidinho, e seu nome fica só seu.' : 'Que bom te ver de novo. Bora jogar?';
+  $('#btn-login').textContent = criar ? 'Criar conta' : 'Entrar';
+  $('#erro-login').textContent = '';
+}
+$$('.abas-login button').forEach((b) => (b.onclick = () => trocarModoLogin(b.dataset.modo)));
+
+if (token) {
   $('#login').hidden = true;
   socket.connect();
   entrar();
+} else {
+  mostrarLogin();
 }
 
 $('#form-login').addEventListener('submit', (e) => {
   e.preventDefault();
   $('#erro-login').textContent = '';
   if (!socket.connected) socket.connect();
-  entrar();
+  const botao = $('#btn-login');
+  botao.disabled = true;
+  const dados = { usuario: $('#usuario').value.trim(), senha: $('#senha').value, convite: $('#convite').value };
+  socket.emit(modoLogin === 'criar' ? 'conta:criar' : 'conta:entrar', dados, (res) => {
+    botao.disabled = false;
+    if (res.erro) {
+      $('#erro-login').textContent = res.erro;
+      return;
+    }
+    token = res.token;
+    salvarStorage('token', token);
+    $('#senha').value = '';
+    $('#convite').value = '';
+    entrar();
+  });
 });
 
 function entrar() {
-  const nome = $('#nome').value.trim();
-  const senha = $('#senha').value;
-  socket.emit('entrar', { nome, senha, sessao }, (res) => {
+  socket.emit('entrar', { token }, (res) => {
     if (res.erro) {
-      $('#erro-login').textContent = res.erro;
-      $('#login').hidden = false;
-      $('#app').hidden = true;
+      if (res.sessaoInvalida) {
+        token = null;
+        salvarStorage('token', null);
+      }
+      mostrarLogin(res.erro);
       return;
     }
-    salvarStorage('nome', nome);
-    salvarStorage('senha', senha);
     const primeiraVez = !estado.eu;
-    estado.eu = { id: res.id, nome };
+    estado.eu = { id: res.id, nome: res.nome };
     estado.canaisTexto = res.canaisTexto;
     estado.canaisVoz = res.canaisVoz;
     estado.iceServers = res.iceServers;
+    if (primeiraVez) aplicarPrefs(res.prefs);
     $('#login').hidden = true;
     $('#app').hidden = false;
-    $('#meu-nome').textContent = nome;
+    $('#meu-nome').textContent = res.nome;
     if (primeiraVez && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
     abrirTexto(primeiraVez ? res.canaisTexto[0] : estado.canalTexto);
   });
+}
+
+// ---------- configurações salvas na conta ----------
+// Volume de cada pessoa, qualidade da tela etc. vão pro servidor; microfone/câmera ficam por PC
+function aplicarPrefs(prefs = {}) {
+  if (prefs.volumes) Object.assign(volumes, prefs.volumes);
+  if (prefs.transmissao) Object.assign(transmissao, prefs.transmissao);
+  if (typeof prefs.membrosVisiveis === 'boolean') estado.membrosVisiveis = prefs.membrosVisiveis;
+  salvarStorage('volumes', volumes);
+  salvarStorage('transmissao', transmissao);
+  salvarStorage('membrosVisiveis', estado.membrosVisiveis);
+}
+
+let prefsTimer;
+function sincronizarPrefs() {
+  clearTimeout(prefsTimer);
+  prefsTimer = setTimeout(() => {
+    socket.emit('prefs', { volumes, transmissao, membrosVisiveis: estado.membrosVisiveis });
+  }, 1000);
 }
 
 // Reconectou (ex.: queda de internet): entra de novo automaticamente
 socket.on('connect', () => { if (estado.eu) entrar(); });
 socket.on('disconnect', (motivo) => {
   // o servidor derrubou porque você entrou de novo em outra aba/janela
-  if (motivo === 'io server disconnect') avisar('Você entrou em outra janela, então esta foi desconectada. Aperte F5 pra voltar aqui.', 60000);
+  if (motivo === 'io server disconnect' && token) avisar('Sua conta entrou em outro lugar, então esta janela foi desconectada. Aperte F5 pra voltar aqui.', 60000);
   if (estado.voz) {
     sairVoz(false);
     avisar('Conexão caiu — você saiu da chamada.');
@@ -358,6 +418,7 @@ $$('.categoria').forEach((c) => {
 $('#btn-membros').onclick = () => {
   estado.membrosVisiveis = !estado.membrosVisiveis;
   salvarStorage('membrosVisiveis', estado.membrosVisiveis);
+  sincronizarPrefs();
   renderMembros();
 };
 
@@ -981,6 +1042,7 @@ function criarTile(d) {
     vol.oninput = () => {
       volumes[chaveVolume(d.u.nome, tipoVol)] = Number(vol.value);
       salvarStorage('volumes', volumes);
+      sincronizarPrefs();
       renderGrid();
     };
     vol.ondblclick = (e) => e.stopPropagation();
@@ -1081,9 +1143,12 @@ async function abrirConfig() {
 
 }
 
-$('#btn-trocar-nome').onclick = () => {
-  salvarStorage('nome', '');
-  location.reload();
+$('#btn-sair-conta').onclick = () => {
+  const t = token;
+  token = null;
+  salvarStorage('token', null);
+  socket.emit('conta:sair', t);
+  setTimeout(() => location.reload(), 200);
 };
 $('.eu').onclick = abrirConfig;
 
@@ -1117,6 +1182,7 @@ $('#cfg-saida').onchange = (e) => {
 async function mudarTransmissao(chave, valor) {
   transmissao[chave] = valor;
   salvarStorage('transmissao', transmissao);
+  sincronizarPrefs();
   const track = estado.tela?.getVideoTracks()[0];
   if (!track) return;
   try {

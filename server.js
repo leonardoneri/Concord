@@ -4,7 +4,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { Server } from 'socket.io';
 
 const CANAIS_TEXTO = ['geral', 'jogos', 'memes'];
@@ -32,6 +33,40 @@ const idDeStream = (v) => (typeof v === 'string' && v.length <= 100 ? v : null);
 
 const MAX_IMAGEM = 10 * 1024 * 1024;
 
+// ---------- contas ----------
+const scryptAsync = promisify(scrypt);
+const USUARIO_RE = /^[\p{L}\p{N}_.-]{2,24}$/u;
+const MAX_PREFS = 20_000; // bytes do JSON de configurações por conta
+
+async function hashSenha(senha, sal = randomBytes(16)) {
+  const hash = await scryptAsync(senha, sal, 64);
+  return `${sal.toString('hex')}:${hash.toString('hex')}`;
+}
+async function conferirSenha(senha, salvo) {
+  const [sal, hash] = salvo.split(':');
+  const novo = await scryptAsync(senha, Buffer.from(sal, 'hex'), 64);
+  return timingSafeEqual(novo, Buffer.from(hash, 'hex'));
+}
+const hashToken = (token) => createHash('sha256').update(token).digest('hex');
+
+// Freia quem erra a senha várias vezes (por IP): 10 erros a cada 15 minutos
+const TENTATIVAS = { max: 10, janela: 15 * 60e3 };
+function criarLimitador() {
+  const erros = new Map(); // ip -> { n, desde }
+  return {
+    bloqueado(ip) {
+      const e = erros.get(ip);
+      if (e && Date.now() - e.desde > TENTATIVAS.janela) erros.delete(ip);
+      return (erros.get(ip)?.n ?? 0) >= TENTATIVAS.max;
+    },
+    errou(ip) {
+      const e = erros.get(ip) ?? { n: 0, desde: Date.now() };
+      e.n++;
+      erros.set(ip, e);
+    },
+  };
+}
+
 // Descobre o tipo pela assinatura do arquivo (não confia no nome)
 function extensaoDaImagem(buf) {
   const h = buf.subarray(0, 12);
@@ -45,7 +80,7 @@ function extensaoDaImagem(buf) {
 /**
  * Sobe o servidor de chat + sinalização da chamada. Usado pelo `node server.js`
  * e pelo app desktop quando você escolhe "Hospedar no meu PC".
- * Se `senha` não for vazia, todo mundo precisa dela pra entrar.
+ * Se `senha` não for vazia, ela vira o código de convite pedido pra criar conta.
  * `host` = '127.0.0.1' deixa o servidor acessível só pelo próprio PC (ex.: quando usa túnel).
  * `turn` = { url, usuario, senha } opcional, pra quem não consegue conectar a chamada direto.
  */
@@ -65,7 +100,34 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       criado_em INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_mensagens_canal ON mensagens (canal, id);
+    CREATE TABLE IF NOT EXISTS contas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      senha TEXT NOT NULL,
+      prefs TEXT NOT NULL DEFAULT '{}',
+      criado_em INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sessoes (
+      token TEXT PRIMARY KEY,
+      conta INTEGER NOT NULL REFERENCES contas (id) ON DELETE CASCADE,
+      criado_em INTEGER NOT NULL
+    );
   `);
+  const sql = {
+    criarConta: db.prepare('INSERT INTO contas (usuario, senha, criado_em) VALUES (?, ?, ?)'),
+    contaPorUsuario: db.prepare('SELECT * FROM contas WHERE usuario = ?'),
+    contaPorToken: db.prepare('SELECT contas.* FROM sessoes JOIN contas ON contas.id = sessoes.conta WHERE sessoes.token = ?'),
+    criarSessao: db.prepare('INSERT INTO sessoes (token, conta, criado_em) VALUES (?, ?, ?)'),
+    apagarSessao: db.prepare('DELETE FROM sessoes WHERE token = ?'),
+    salvarPrefs: db.prepare('UPDATE contas SET prefs = ? WHERE id = ?'),
+  };
+  const limitador = criarLimitador();
+
+  function novaSessao(contaId) {
+    const token = randomBytes(32).toString('base64url');
+    sql.criarSessao.run(hashToken(token), contaId, Date.now());
+    return token;
+  }
   const inserirMensagem = db.prepare(
     'INSERT INTO mensagens (canal, autor, cor, texto, criado_em) VALUES (?, ?, ?, ?, ?)'
   );
@@ -87,34 +149,75 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   const usuarios = new Map(); // socket.id -> usuário
 
   function emitirPresenca() {
-    io.to('todos').emit('presenca', [...usuarios.values()].map(({ sessao, ...u }) => u));
+    io.to('todos').emit('presenca', [...usuarios.values()].map(({ conta, ...u }) => u));
   }
 
   io.on('connection', (socket) => {
     const eu = () => usuarios.get(socket.id);
 
-    socket.on('entrar', ({ nome, senha: tentativa, sessao } = {}, ack) => {
-      if (typeof ack !== 'function') return;
-      nome = String(nome ?? '').trim().slice(0, 32);
-      sessao = String(sessao ?? '').slice(0, 64);
-      if (!nome) return ack({ erro: 'Escolhe um nome aí' });
-      if (senha && tentativa !== senha) return ack({ erro: 'Senha errada' });
+    const ip = String(socket.handshake.headers['x-forwarded-for'] ?? socket.handshake.address).split(',')[0].trim();
 
-      const repetido = [...usuarios.values()].find(
-        (o) => o.id !== socket.id && o.nome.toLowerCase() === nome.toLowerCase()
-      );
-      if (repetido) {
-        // Mesmo navegador/app reconectando antes do servidor perceber a queda: derruba a conexão velha
-        if (sessao && repetido.sessao === sessao) {
-          usuarios.delete(repetido.id);
-          io.sockets.sockets.get(repetido.id)?.disconnect(true);
-        } else {
-          return ack({ erro: `Já tem alguém online como "${repetido.nome}". Escolhe outro nome.` });
+    // O que a tela de login precisa saber antes de entrar
+    socket.on('servidor:info', (ack) => {
+      if (typeof ack === 'function') ack({ pedeConvite: !!senha });
+    });
+
+    socket.on('conta:criar', async ({ usuario, senha: senhaConta, convite } = {}, ack) => {
+      if (typeof ack !== 'function') return;
+      usuario = String(usuario ?? '').trim();
+      senhaConta = String(senhaConta ?? '');
+      if (!USUARIO_RE.test(usuario)) return ack({ erro: 'O usuário precisa ter de 2 a 24 letras, números, ponto, traço ou _' });
+      if (senhaConta.length < 6) return ack({ erro: 'A senha precisa ter pelo menos 6 caracteres' });
+      if (senhaConta.length > 200) return ack({ erro: 'Senha comprida demais' });
+      if (limitador.bloqueado(ip)) return ack({ erro: 'Muitas tentativas. Espera uns minutos e tenta de novo.' });
+      if (senha && convite !== senha) {
+        limitador.errou(ip);
+        return ack({ erro: 'Código de convite errado' });
+      }
+      if (sql.contaPorUsuario.get(usuario)) return ack({ erro: `O usuário "${usuario}" já existe. Escolhe outro ou entra com ele.` });
+      const { lastInsertRowid } = sql.criarConta.run(usuario, await hashSenha(senhaConta), Date.now());
+      ack({ token: novaSessao(Number(lastInsertRowid)) });
+    });
+
+    socket.on('conta:entrar', async ({ usuario, senha: senhaConta } = {}, ack) => {
+      if (typeof ack !== 'function') return;
+      if (limitador.bloqueado(ip)) return ack({ erro: 'Muitas tentativas. Espera uns minutos e tenta de novo.' });
+      const conta = sql.contaPorUsuario.get(String(usuario ?? '').trim());
+      if (!conta || !(await conferirSenha(String(senhaConta ?? ''), conta.senha))) {
+        limitador.errou(ip);
+        return ack({ erro: 'Usuário ou senha errados' });
+      }
+      ack({ token: novaSessao(conta.id) });
+    });
+
+    socket.on('conta:sair', (token) => {
+      if (typeof token === 'string') sql.apagarSessao.run(hashToken(token));
+      socket.disconnect(true);
+    });
+
+    socket.on('prefs', (prefs) => {
+      const u = eu();
+      if (!u || typeof prefs !== 'object' || prefs === null) return;
+      const json = JSON.stringify(prefs);
+      if (json.length <= MAX_PREFS) sql.salvarPrefs.run(json, u.conta);
+    });
+
+    socket.on('entrar', ({ token } = {}, ack) => {
+      if (typeof ack !== 'function') return;
+      const conta = typeof token === 'string' && sql.contaPorToken.get(hashToken(token));
+      if (!conta) return ack({ erro: 'Sua sessão expirou. Entra de novo.', sessaoInvalida: true });
+      const nome = conta.usuario;
+
+      // A mesma conta aberta em outro lugar (ou reconectando antes do servidor perceber a queda): derruba a velha
+      for (const o of [...usuarios.values()]) {
+        if (o.conta === conta.id && o.id !== socket.id) {
+          usuarios.delete(o.id);
+          io.sockets.sockets.get(o.id)?.disconnect(true);
         }
       }
 
       usuarios.set(socket.id, {
-        sessao,
+        conta: conta.id,
         id: socket.id,
         nome,
         cor: corDoNome(nome),
@@ -126,7 +229,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         tela: null,
       });
       socket.join('todos');
-      ack({ id: socket.id, canaisTexto: CANAIS_TEXTO, canaisVoz: CANAIS_VOZ, iceServers: ICE_SERVERS });
+      ack({ id: socket.id, nome, prefs: JSON.parse(conta.prefs), canaisTexto: CANAIS_TEXTO, canaisVoz: CANAIS_VOZ, iceServers: ICE_SERVERS });
       emitirPresenca();
     });
 

@@ -9,16 +9,24 @@
 </head>
 <body>
   <div id="login">
-    <form id="form-login" class="cartao">
-      <h1>Boas-vindas de volta!</h1>
-      <p class="sub">Que bom te ver de novo. Bora jogar?</p>
-      <label>Nome de exibição <span class="req">*</span>
-        <input id="nome" maxlength="32" autocomplete="nickname" required autofocus>
+    <form id="form-login" class="cartao" data-modo="entrar">
+      <h1 id="login-titulo">Boas-vindas de volta!</h1>
+      <p class="sub" id="login-sub">Que bom te ver de novo. Bora jogar?</p>
+      <div class="abas-login" role="tablist">
+        <button type="button" role="tab" data-modo="entrar" class="ativa">Entrar</button>
+        <button type="button" role="tab" data-modo="criar">Criar conta</button>
+      </div>
+      <label>Usuário <span class="req">*</span>
+        <input id="usuario" maxlength="24" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus>
       </label>
-      <label>Senha do servidor
-        <input id="senha" type="password" autocomplete="current-password" placeholder="Deixe vazio se não tiver">
+      <label>Senha <span class="req">*</span>
+        <input id="senha" type="password" maxlength="200" autocomplete="current-password" required>
       </label>
-      <button type="submit" class="btn-primario">Entrar</button>
+      <label class="so-criar" id="campo-convite" hidden>Código de convite <span class="req">*</span>
+        <input id="convite" type="password" autocomplete="off" placeholder="Peça pra quem administra o servidor">
+      </label>
+      <p class="so-criar dica-login" hidden>Seu usuário é o nome que a galera vê. Use 2 a 24 letras, números, ponto, traço ou _.</p>
+      <button type="submit" class="btn-primario" id="btn-login">Entrar</button>
       <p id="erro-login"></p>
       <button type="button" class="btn-link trocar-servidor" hidden>Trocar de servidor</button>
     </form>
@@ -143,7 +151,7 @@
         </label>
       </div>
       <p class="dica-cfg">Mais qualidade e fps gastam mais internet de quem transmite. Dá pra trocar no meio da transmissão.</p>
-      <button type="button" class="btn-link" id="btn-trocar-nome">Trocar meu nome</button>
+      <button type="button" class="btn-link" id="btn-sair-conta">Sair da conta</button>
     </div>
   </div>
 
