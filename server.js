@@ -139,6 +139,20 @@ function criarLimitador() {
   };
 }
 
+// ---------- mapa da chamada (sala pixel art com áudio por proximidade) ----------
+const MAPA_MAX = 64; // tamanho máximo do mapa em tiles (o desenho fica no app)
+// opções do boneco: quantas escolhas tem cada parte
+const BONECO = { pele: 6, cabelo: 6, corCabelo: 8, roupa: 10, calca: 5 };
+function limparBoneco(b) {
+  if (typeof b !== 'object' || b === null) return null;
+  const limpo = {};
+  for (const [k, n] of Object.entries(BONECO)) {
+    const v = Number(b[k]);
+    limpo[k] = Number.isInteger(v) && v >= 0 && v < n ? v : 0;
+  }
+  return limpo;
+}
+
 // ---------- títulos do YouTube (pra fila do "assistir junto") ----------
 const MAX_FILA = 200;
 const titulosYoutube = new Map(); // id do vídeo -> título (null = privado/apagado)
@@ -814,6 +828,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   const previas = new Map(); // id do usuário -> miniatura da tela que a pessoa está transmitindo
   // "Assistir junto": canal de voz -> { video, por, tocando, posicao, em } (posicao em segundos no instante `em`)
   const assistindo = new Map();
+  // canais de voz com o mapa ligado (a posição e o boneco ficam em cada usuário: u.pos, u.boneco)
+  const mapas = new Set();
   const sala = (srv) => `s:${srv}`;
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
@@ -926,17 +942,32 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     const dados = assistirPublico(canal);
     for (const o of usuarios.values()) if (o.voz === canal) io.to(o.socket).emit('assistir', dados);
   }
-  // sala vazia: para o vídeo
+  // sala vazia: para o vídeo (e desliga o mapa)
   function limparAssistir() {
     for (const canal of assistindo.keys()) {
       if (![...usuarios.values()].some((o) => o.voz === canal)) assistindo.delete(canal);
     }
+    for (const canal of mapas) {
+      if (![...usuarios.values()].some((o) => o.voz === canal)) mapas.delete(canal);
+    }
+  }
+
+  // mapa: quem está na sala, onde está e com que boneco
+  function mapaPublico(canal) {
+    if (!mapas.has(canal)) return null;
+    const pessoas = [...usuarios.values()].filter((o) => o.voz === canal && o.pos)
+      .map((o) => ({ id: o.id, ...o.pos, boneco: o.boneco ?? null }));
+    return { pessoas };
+  }
+  function emitirMapa(canal, semSocket = null) {
+    const dados = mapaPublico(canal);
+    for (const o of usuarios.values()) if (o.voz === canal && o.socket !== semSocket) io.to(o.socket).emit('mapa', dados);
   }
 
   function tirarDaVoz(filtro) {
     for (const o of usuarios.values()) {
       if (o.voz != null && filtro(o)) {
-        Object.assign(o, { voz: null, mic: null, camera: null, tela: null });
+        Object.assign(o, { voz: null, mic: null, camera: null, tela: null, pos: null });
         previas.delete(o.id);
         io.to(o.socket).emit('voz:expulso');
       }
@@ -1705,6 +1736,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       u.voz = c.id;
       u.camera = null;
       u.tela = null;
+      u.pos = null;
       previas.delete(u.id);
       const outros = [...usuarios.values()].filter((o) => o.voz === c.id && o.id !== u.id).map((o) => o.id);
       emitirPresenca();
@@ -1769,7 +1801,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     });
 
     quando('voz:sair', (u) => {
-      Object.assign(u, { voz: null, mic: null, camera: null, tela: null, rede: null });
+      Object.assign(u, { voz: null, mic: null, camera: null, tela: null, rede: null, pos: null });
       previas.delete(u.id);
       emitirPresenca();
       limparAssistir();
@@ -1845,6 +1877,58 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       ack({});
     });
     quando('assistir:estado', (u, _, ack) => ack(u.voz != null ? assistirPublico(u.voz) : null));
+
+    // ---------- mapa da chamada: cada um anda com seu boneco e ouve mais alto quem está perto ----------
+    quando('mapa:ligar', (u, _, ack) => {
+      if (u.voz == null) return ack({ erro: 'Entra numa sala de voz primeiro' });
+      mapas.add(u.voz);
+      emitirMapa(u.voz);
+      ack({});
+    });
+    quando('mapa:desligar', (u, _, ack) => {
+      if (u.voz != null && mapas.delete(u.voz)) {
+        for (const o of usuarios.values()) if (o.voz === u.voz) o.pos = null;
+        emitirMapa(u.voz);
+      }
+      ack({});
+    });
+    quando('mapa:estado', (u, _, ack) => ack(u.voz != null ? mapaPublico(u.voz) : null));
+    quando('mapa:boneco', (u, b, ack) => {
+      const boneco = limparBoneco(b);
+      if (!boneco) return ack({ erro: 'Boneco inválido' });
+      u.boneco = boneco;
+      if (u.voz != null && mapas.has(u.voz) && u.pos) {
+        for (const o of usuarios.values()) if (o.voz === u.voz && o.id !== u.id) io.to(o.socket).emit('mapa:boneco', { id: u.id, boneco });
+      }
+      ack({});
+    });
+    // posição em tiles (pode ser quebrada), direção e se está andando; vai pra sala sem esperar confirmação
+    let ultimoPasso = 0;
+    quando('mapa:mover', (u, { x, y, dir, anda } = {}) => {
+      if (u.voz == null || !mapas.has(u.voz)) return;
+      x = Number(x);
+      y = Number(y);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > MAPA_MAX || y > MAPA_MAX) return;
+      if (!['baixo', 'cima', 'esq', 'dir'].includes(dir)) dir = 'baixo';
+      const primeira = !u.pos;
+      u.pos = { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, dir, anda: !!anda };
+      if (primeira) return emitirMapa(u.voz); // chegou no mapa: todo mundo recebe a lista com ele
+      if (Date.now() - ultimoPasso < 40) return; // o cliente manda ~12 por segundo; mais que isso é descartado
+      ultimoPasso = Date.now();
+      for (const o of usuarios.values()) {
+        if (o.voz === u.voz && o.id !== u.id) io.to(o.socket).volatile.emit('mapa:pos', { id: u.id, ...u.pos });
+      }
+    });
+    // emoji em cima do boneco por uns segundos
+    let ultimoEmote = 0;
+    quando('mapa:emote', (u, emoji, ack) => {
+      if (u.voz == null || !mapas.has(u.voz)) return ack({});
+      if (typeof emoji !== 'string' || !EMOJI_RE.test(emoji)) return ack({ erro: 'Emoji inválido' });
+      if (Date.now() - ultimoEmote < 700) return ack({});
+      ultimoEmote = Date.now();
+      for (const o of usuarios.values()) if (o.voz === u.voz) io.to(o.socket).emit('mapa:emote', { id: u.id, emoji });
+      ack({});
+    });
 
     // qualidade da conexão da pessoa na chamada (ela mesma mede com quem está na sala)
     quando('rede', (u, r) => {

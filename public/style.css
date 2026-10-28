@@ -1511,3 +1511,45 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .lista-times { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
 .time { display: grid; gap: 2px; align-content: start; background: var(--rodape); border-radius: 6px; padding: 8px 10px; font-size: 14px; }
 .time b { color: var(--acento); margin-bottom: 2px; }
+
+/* ---------- mapa da chamada (pixel art) ---------- */
+#mapa { display: none; position: relative; flex: 1; min-height: 0; flex-direction: column; gap: 8px; }
+#grid.mapa #mapa { display: flex; }
+#tela-mapa { flex: 1; min-height: 0; width: 100%; border-radius: 8px; background: #101015; outline: none; image-rendering: pixelated; cursor: pointer; }
+#tela-mapa:focus-visible { box-shadow: 0 0 0 2px var(--acento); }
+#zona-mapa { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); padding: 4px 12px; border-radius: 6px; background: #000000b0; color: #ffe8a8; font-size: 13px; font-weight: 600; pointer-events: none; white-space: nowrap; }
+.barra-mapa { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#info-mapa { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--texto-2); }
+.barra-mapa .btn-secundario { padding: 6px 12px; font-size: 13px; }
+#emotes-mapa { display: flex; gap: 2px; }
+.btn-emote-mapa { width: 32px; height: 32px; border-radius: 6px; font-size: 18px; line-height: 1; }
+.btn-emote-mapa:hover { background: var(--hover); }
+/* com o mapa, as câmeras de quem está perto ficam numa faixa embaixo */
+#grid.mapa #tira {
+  flex: none;
+  height: clamp(72px, 15vh, 130px);
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+#grid.mapa #tira .tile { height: 100%; flex: none; max-height: none; }
+#grid.mapa #tira .tile .capa .avatar { width: 44px; height: 44px; font-size: 18px; }
+#grid.mapa #tira .rotulo { left: 4px; bottom: 4px; right: 4px; }
+#grid.mapa #tira .nome-tile { font-size: 12px; padding: 1px 6px; max-width: 100%; overflow: hidden; white-space: nowrap; }
+#grid.mapa #tira .rotulo input[type=range], #grid.mapa #tira .btn-cheia { display: none; }
+#btn-mapa.ligado { background: var(--acento); }
+
+#painel-boneco { position: fixed; width: min(340px, calc(100vw - 16px)); padding: 12px; display: grid; gap: 10px; }
+#painel-boneco h3 { margin: 0; font-size: 16px; color: var(--forte); }
+#previa-boneco { width: 192px; height: 80px; justify-self: center; image-rendering: pixelated; background: #2b2d31; border-radius: 6px; }
+#opcoes-boneco { display: grid; gap: 8px; }
+.linha-boneco { display: grid; gap: 4px; }
+.titulo-boneco { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--texto-2); }
+.cores-boneco { display: flex; flex-wrap: wrap; gap: 6px; }
+.cor-boneco { width: 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 1px #0006; }
+.cor-boneco.ativa { box-shadow: 0 0 0 2px #111214, 0 0 0 4px var(--forte); }
+.estilos-boneco { display: flex; flex-wrap: wrap; gap: 4px; }
+.estilos-boneco .btn-secundario { padding: 4px 10px; font-size: 13px; }
+.estilos-boneco .btn-secundario.ativo { background: var(--acento); color: #fff; }

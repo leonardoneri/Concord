@@ -158,6 +158,16 @@
               </div>
             </div>
             <div id="palco"></div>
+            <div id="mapa">
+              <canvas id="tela-mapa" tabindex="0"></canvas>
+              <div id="zona-mapa" hidden></div>
+              <div class="barra-mapa">
+                <span id="info-mapa">WASD ou setas pra andar · clique pra ir até lá · perto = ouve mais alto</span>
+                <div id="emotes-mapa"></div>
+                <button type="button" class="btn-secundario" id="btn-boneco">Meu boneco</button>
+                <button type="button" class="btn-secundario" id="btn-desligar-mapa">Desligar mapa</button>
+              </div>
+            </div>
             <div id="tira"></div>
           </div>
           <div class="controles-chamada">
@@ -166,6 +176,7 @@
             <button class="btn-redondo btn-mudo" title="Silenciar"></button>
             <button class="btn-redondo" id="btn-tira" title="Esconder participantes" data-icone="membros" hidden></button>
             <button class="btn-redondo" id="btn-assistir" title="Assistir junto: um vídeo do YouTube sincronizado pra todo mundo da chamada" data-icone="tv"></button>
+            <button class="btn-redondo" id="btn-mapa" title="Mapa: cada um anda com um bonequinho e ouve mais alto quem está perto" data-icone="mapa"></button>
             <button class="btn-redondo" id="btn-sons" title="Soundboard: tocar um som pra todo mundo da chamada" data-icone="sons"></button>
             <button class="btn-redondo" id="btn-times" title="Sortear times com quem está na chamada" data-icone="dado"></button>
             <button class="btn-redondo perigo btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
@@ -456,6 +467,11 @@
     </form>
     <button type="button" class="menu-botao" id="btn-novo-som">+ Adicionar som do servidor</button>
   </div>
+  <div id="painel-boneco" class="popover" hidden>
+    <h3>Meu boneco</h3>
+    <canvas id="previa-boneco" width="48" height="20"></canvas>
+    <div id="opcoes-boneco"></div>
+  </div>
   <div id="previa-tela" hidden></div>
 
   <div id="modal-eventos" class="modal" hidden>
@@ -548,5 +564,6 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="app.js"></script>
+  <script src="mapa.js"></script>
 </body>
 </html>

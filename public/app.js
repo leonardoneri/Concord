@@ -64,6 +64,7 @@ ICONES.buscar = '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>';
 ICONES.arquivo = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>';
 ICONES.arroba = '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>';
 ICONES.chat = '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>';
+ICONES.mapa = '<path d="M14.1 6.4 9.9 4.2a2 2 0 0 0-1.8 0L3.6 6.4A1 1 0 0 0 3 7.3v12.1a1 1 0 0 0 1.4.9l3.7-1.9a2 2 0 0 1 1.8 0l4.2 2.2a2 2 0 0 0 1.8 0l4.5-2.2a1 1 0 0 0 .6-.9V4.6a1 1 0 0 0-1.4-.9l-3.7 1.9a2 2 0 0 1-1.8 0z"/><path d="M15 5.8v15M9 3.2v15"/>';
 ICONES.micOff = ICONES.mic + CORTE;
 ICONES.foneOff = ICONES.fone + CORTE;
 
@@ -117,6 +118,7 @@ const estado = {
   mic: null,
   cam: null,
   tela: null,
+  mapa: null, // mapa da chamada ligado: { pessoas } (ver mapa.js)
 };
 
 // id do outro usuário -> { pc, polite, makingOffer, ignoreOffer, streams, senders, fila }
@@ -126,6 +128,7 @@ const volumes = lerStorage('volumes', {});
 const ajustes = lerStorage('ajustes', {});
 const dispositivos = lerStorage('dispositivos', { mic: '', cam: '', saida: '' });
 const transmissao = lerStorage('transmissao', { resolucao: '1080', fps: 30 });
+let meuBoneco = lerStorage('boneco', null); // como é o meu boneco no mapa da chamada
 
 let toastTimer;
 function avisar(msg, duracao = 5000) {
@@ -829,6 +832,8 @@ function aplicarPrefs(prefs = {}) {
   salvarStorage('ajustes', ajustes);
   if (prefs.transmissao) Object.assign(transmissao, prefs.transmissao);
   if (typeof prefs.membrosVisiveis === 'boolean') estado.membrosVisiveis = prefs.membrosVisiveis;
+  if (prefs.boneco) meuBoneco = prefs.boneco;
+  salvarStorage('boneco', meuBoneco);
   salvarStorage('volumes', volumes);
   salvarStorage('transmissao', transmissao);
   salvarStorage('membrosVisiveis', estado.membrosVisiveis);
@@ -838,7 +843,7 @@ let prefsTimer;
 function sincronizarPrefs() {
   clearTimeout(prefsTimer);
   prefsTimer = setTimeout(() => {
-    socket.emit('prefs', { volumes, ajustes, transmissao, membrosVisiveis: estado.membrosVisiveis });
+    socket.emit('prefs', { volumes, ajustes, transmissao, membrosVisiveis: estado.membrosVisiveis, boneco: meuBoneco });
   }, 1000);
 }
 
@@ -886,6 +891,7 @@ function restaurarVoz(voz) {
     if (a || !tinha) return aplicarAssistir(a);
     socket.emit('assistir:iniciar', tinha.video, () => socket.emit('assistir:controle', { tocando: tinha.tocando, posicao: tinha.posicao }));
   });
+  restaurarMapa();
 }
 
 let membrosVoz = new Set();
@@ -2407,6 +2413,8 @@ async function entrarVoz(canal) {
     }
     for (const id of ids) if (!peers.has(id)) criarPeer(id);
     socket.emit('assistir:estado', null, aplicarAssistir); // já tem vídeo passando nessa sala?
+    socket.emit('mapa:boneco', meuBonecoAgora());
+    socket.emit('mapa:estado', null, aplicarMapa); // e o mapa, está ligado?
   });
   enviarEstado();
   atalhosGlobais(true);
@@ -2432,6 +2440,7 @@ function sairVoz(avisarServidor = true) {
   estado.vozInfo = null;
   estado.assistir = null;
   fecharPlayer();
+  aplicarMapa(null);
   Object.assign(minhaRede, { ping: null, perda: null, ruinsSeguidas: 0, enviado: null });
   minhaRede.porPeer.clear();
   miniaturas(false);
@@ -2820,10 +2829,17 @@ function renderGrid() {
     }
   }
 
+  // mapa ligado: só aparece o vídeo de quem está perto, e nada vai pro grande sozinho (só clicando)
+  const noMapa = !!(estado.voz && estado.mapa);
+  if (noMapa) desejados.splice(0, desejados.length, ...desejados.filter((d) => d.local || pertoNoMapa(d.u.id)));
   const assistindo = !!(estado.voz && estado.assistir);
-  const destaque = escolherDestaque(desejados, assistindo);
+  const destaque = noMapa
+    ? (foco === 'assistir' ? assistindo : desejados.some((d) => d.chave === foco)) ? foco : null
+    : escolherDestaque(desejados, assistindo);
   destaqueAtual = destaque;
   const videoGrande = destaque === 'assistir';
+  grid.classList.toggle('mapa', noMapa && !destaque);
+  $('#btn-mapa').classList.toggle('ligado', noMapa);
   grid.classList.toggle('foco', !!destaque);
   grid.classList.toggle('assistindo', videoGrande);
   grid.classList.toggle('assistindo-mini', assistindo && !videoGrande);
@@ -3030,7 +3046,7 @@ function atualizarAudios() {
       }
       aplicarSaida(audio);
       const silenciado = estado.surdo || (tipo === 'mic' && ajustes[u.nome]?.mudo);
-      const volume = silenciado ? 0 : volumeDe(u.nome, tipo);
+      const volume = silenciado ? 0 : volumeDe(u.nome, tipo) * (tipo === 'mic' ? fatorMapa(id) : 1);
       // acima de 100% o <audio> não alcança: toca pelo GainNode e o <audio> fica mudo
       // (mas continua tocando — o Chrome só entrega o áudio do WebRTC se houver um elemento)
       const reforcado = ajustarReforco(chave, stream, volume);
