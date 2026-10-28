@@ -214,7 +214,9 @@ app.whenReady().then(() => {
       const escolha = await escolherFonte(fontes);
       const fonte = escolha && fontes.find((f) => f.id === escolha.id);
       if (!fonte) return callback({});
-      callback(escolha.audio && process.platform === 'win32' ? { video: fonte, audio: 'loopback' } : { video: fonte });
+      // áudio do PC todo, menos o do próprio Concord: senão a voz da galera na chamada
+      // vai junto na transmissão e todo mundo se ouve de volta (o Discord faz igual)
+      callback(escolha.audio && process.platform === 'win32' ? { video: fonte, audio: 'loopbackWithoutChrome' } : { video: fonte });
     } catch (err) {
       console.error(err);
       callback({});

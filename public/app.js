@@ -2049,7 +2049,8 @@ async function alternarTela() {
     try {
       estado.tela = await navigator.mediaDevices.getDisplayMedia({
         video: restricoesTela(),
-        audio: true,
+        // não grava o som da própria página (a voz da chamada) junto com o da tela
+        audio: { restrictOwnAudio: true },
       });
     } catch {
       return; // cancelou a escolha
