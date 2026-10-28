@@ -35,6 +35,9 @@ const ICONES = {
   desligar: '<path fill="currentColor" d="M3 15.5c5-5 13-5 18 0l-2.5 2.5-3.2-1.6v-2.8a10 10 0 0 0-6.6 0v2.8L5.5 18z"/>',
   config: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   jogo: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><rect x="2" y="6" width="20" height="12" rx="4"/>',
+  sons: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  volume: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>',
+  lixo: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
   membros: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
   seta: '<path d="m6 9 6 6 6-6"/>',
   sinal: '<path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 4v16"/>',
@@ -1921,7 +1924,7 @@ async function entrarVoz(canal) {
   if (estado.mic) monitorarFala(estado.eu.id, estado.mic);
 
   estado.voz = canal;
-  estado.vozInfo = { canal: canalPorId(canal)?.nome ?? '', servidor: estado.servidor.nome };
+  estado.vozInfo = { canal: canalPorId(canal)?.nome ?? '', servidor: estado.servidor.nome, servidorId: estado.servidor.id };
   estado.view = 'voz';
   socket.emit('voz:entrar', canal, (ids) => {
     if (!Array.isArray(ids)) {
@@ -2962,6 +2965,254 @@ function abrirPerfil(nome, evento) {
   cartao.style.left = `${Math.max(8, Math.min(x + 8, innerWidth - width - 8))}px`;
   cartao.style.top = `${Math.max(8, Math.min(y - 40, innerHeight - height - 8))}px`;
 }
+
+// ---------- soundboard ----------
+// Sons que já vêm no app: gerados aqui mesmo (sem arquivo), viram um .wav na hora de tocar
+const SONS_PADRAO = [
+  { padrao: 'badumtss', nome: 'Ba-dum-tss', emoji: '🥁' },
+  { padrao: 'buzina', nome: 'Buzina', emoji: '📯' },
+  { padrao: 'triste', nome: 'Triste', emoji: '😢' },
+  { padrao: 'vitoria', nome: 'Vitória', emoji: '🏆' },
+  { padrao: 'palmas', nome: 'Palmas', emoji: '👏' },
+  { padrao: 'grilo', nome: 'Grilos', emoji: '🦗' },
+];
+const urlsPadrao = new Map();
+let volumeSons = Number(lerStorage('volumeSons', 0.6));
+let sonsServidor = { servidor: null, sons: [] };
+
+function wav(buffer) {
+  const dados = buffer.getChannelData(0);
+  const out = new DataView(new ArrayBuffer(44 + dados.length * 2));
+  const txt = (o, s) => [...s].forEach((c, i) => out.setUint8(o + i, c.charCodeAt(0)));
+  txt(0, 'RIFF'); out.setUint32(4, 36 + dados.length * 2, true); txt(8, 'WAVE'); txt(12, 'fmt ');
+  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+  out.setUint32(24, buffer.sampleRate, true); out.setUint32(28, buffer.sampleRate * 2, true);
+  out.setUint16(32, 2, true); out.setUint16(34, 16, true); txt(36, 'data'); out.setUint32(40, dados.length * 2, true);
+  dados.forEach((v, i) => out.setInt16(44 + i * 2, Math.max(-1, Math.min(1, v)) * 0x7fff, true));
+  return new Blob([out], { type: 'audio/wav' });
+}
+
+async function gerarSomPadrao(nome) {
+  if (urlsPadrao.has(nome)) return urlsPadrao.get(nome);
+  const dur = { badumtss: 1.4, buzina: 1.3, triste: 2.6, vitoria: 1.3, palmas: 1.6, grilo: 2.2 }[nome] ?? 1;
+  const taxa = 44100;
+  const ctx = new OfflineAudioContext(1, Math.ceil(taxa * dur), taxa);
+  const ruido = () => {
+    const b = ctx.createBuffer(1, taxa * dur, taxa);
+    const d = b.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const s = ctx.createBufferSource();
+    s.buffer = b;
+    return s;
+  };
+  // envelope rápido: sobe em `ataque`, cai até `fim`
+  const env = (g, t, pico, ataque, fim) => {
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(pico, t + ataque);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + fim);
+  };
+  const tom = (t, f0, f1, dura, pico = 0.8) => {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f1, t + dura);
+    env(g, t, pico, 0.005, dura);
+    o.connect(g).connect(ctx.destination);
+    o.start(t);
+    o.stop(t + dura);
+  };
+  const chiado = (t, dura, filtro, freq, pico) => {
+    const s = ruido();
+    const f = ctx.createBiquadFilter();
+    f.type = filtro;
+    f.frequency.value = freq;
+    const g = ctx.createGain();
+    env(g, t, pico, 0.003, dura);
+    s.connect(f).connect(g).connect(ctx.destination);
+    s.start(t);
+    s.stop(t + dura);
+  };
+  const nota = (t, freq, dura, tipo, pico, vibrato = 0) => {
+    const o = ctx.createOscillator();
+    o.type = tipo;
+    o.frequency.value = freq;
+    if (vibrato) {
+      const lfo = ctx.createOscillator();
+      const lg = ctx.createGain();
+      lfo.frequency.value = 6;
+      lg.gain.value = vibrato;
+      lfo.connect(lg).connect(o.frequency);
+      lfo.start(t);
+      lfo.stop(t + dura);
+    }
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 2200;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    const subida = Math.min(0.03, dura / 3);
+    g.gain.exponentialRampToValueAtTime(pico, t + subida);
+    g.gain.setValueAtTime(pico, Math.max(t + subida, t + dura - 0.06));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dura);
+    o.connect(f).connect(g).connect(ctx.destination);
+    o.start(t);
+    o.stop(t + dura);
+  };
+  if (nome === 'badumtss') {
+    tom(0, 200, 90, 0.25);
+    tom(0.22, 150, 70, 0.3);
+    tom(0.5, 60, 40, 0.3, 0.9);
+    chiado(0.5, 0.9, 'highpass', 6000, 0.5);
+  } else if (nome === 'buzina') {
+    [0, 0.42, 0.62].forEach((t, i) => [349, 440, 523].forEach((f) => nota(t, f, i === 2 ? 0.65 : 0.32, 'sawtooth', 0.13, 3)));
+  } else if (nome === 'triste') {
+    [[0, 311], [0.45, 294], [0.9, 277]].forEach(([t, f]) => nota(t, f, 0.4, 'sawtooth', 0.22));
+    nota(1.35, 262, 1.2, 'sawtooth', 0.22, 8);
+  } else if (nome === 'vitoria') {
+    [[0, 523], [0.12, 659], [0.24, 784]].forEach(([t, f]) => nota(t, f, 0.12, 'square', 0.12));
+    nota(0.36, 1047, 0.9, 'square', 0.12, 5);
+  } else if (nome === 'palmas') {
+    for (let t = 0; t < 1.3; t += 0.09 + Math.random() * 0.05) chiado(t, 0.08, 'bandpass', 1200 + Math.random() * 600, 0.9);
+  } else if (nome === 'grilo') {
+    for (const inicio of [0, 1.1]) for (let k = 0; k < 4; k++) nota(inicio + k * 0.07, 4400, 0.05, 'sine', 0.15);
+  }
+  const url = URL.createObjectURL(wav(await ctx.startRendering()));
+  urlsPadrao.set(nome, url);
+  return url;
+}
+
+function botaoSom(som) {
+  const b = el('button', 'botao-som');
+  b.type = 'button';
+  b.title = som.nome;
+  b.append(el('span', 'emoji-som', som.emoji), el('span', 'nome-som', som.nome));
+  b.onclick = () => tocarNaChamada(som.padrao ?? som.id);
+  const meu = som.conta === estado.eu.conta;
+  if (som.id && (meu || perfilPorConta(estado.eu.conta)?.admin)) {
+    const x = el('span', 'apagar-som');
+    x.title = 'Apagar som';
+    x.append(icone('lixo'));
+    x.onclick = (e) => {
+      e.stopPropagation();
+      if (!confirm(`Apagar o som "${som.nome}" do servidor?`)) return;
+      socket.emit('som:apagar', som.id, (r) => r?.erro && avisar(r.erro));
+    };
+    b.append(x);
+  }
+  return b;
+}
+
+function renderSons() {
+  const padrao = el('div', 'grade-sons');
+  padrao.append(...SONS_PADRAO.map(botaoSom));
+  const doServidor = el('div', 'grade-sons');
+  doServidor.append(...sonsServidor.sons.map(botaoSom));
+  const partes = [el('div', 'titulo-sons', 'Do Concord'), padrao, el('div', 'titulo-sons', `Do servidor (${sonsServidor.sons.length})`)];
+  partes.push(sonsServidor.sons.length ? doServidor : el('p', 'vazio-sons', 'Nenhum ainda. Adicione o primeiro aí embaixo!'));
+  $('#lista-sons').replaceChildren(...partes);
+}
+
+function abrirSons(e) {
+  e?.stopPropagation();
+  const painel = $('#painel-sons');
+  if (!painel.hidden) return fecharPopovers();
+  fecharPopovers();
+  const srv = estado.vozInfo?.servidorId;
+  if (srv !== sonsServidor.servidor) sonsServidor = { servidor: srv, sons: [] };
+  renderSons();
+  socket.emit('sons:lista', srv, (r) => {
+    if (r?.sons && sonsServidor.servidor === srv) {
+      sonsServidor.sons = r.sons;
+      renderSons();
+    }
+  });
+  $('#vol-sons').value = volumeSons;
+  $('#form-som').hidden = true;
+  $('#btn-novo-som').hidden = false;
+  painel.hidden = false;
+  const r = $('#btn-sons').getBoundingClientRect();
+  const largura = painel.getBoundingClientRect().width;
+  painel.style.left = `${Math.max(8, Math.min(innerWidth - largura - 8, r.left + r.width / 2 - largura / 2))}px`;
+  painel.style.top = `${Math.max(8, r.top - painel.getBoundingClientRect().height - 10)}px`;
+}
+$('#btn-sons').onclick = abrirSons;
+$('#vol-sons').oninput = (e) => {
+  volumeSons = Number(e.target.value);
+  salvarStorage('volumeSons', volumeSons);
+};
+
+function tocarNaChamada(som) {
+  if (!estado.voz) return avisar('Entra numa sala de voz pra tocar sons.');
+  socket.emit('som:tocar', som, (r) => r?.erro && avisar(r.erro));
+}
+
+socket.on('sons', ({ servidor, sons }) => {
+  if (servidor !== sonsServidor.servidor) return;
+  sonsServidor.sons = sons;
+  if (!$('#painel-sons').hidden) renderSons();
+});
+
+// Alguém da chamada tocou um som: cada um toca aqui (respeita o "surdo" e o volume dos sons)
+socket.on('som', async (s) => {
+  if (!estado.voz || estado.surdo) return;
+  const padrao = SONS_PADRAO.find((x) => x.padrao === s.padrao);
+  const emoji = padrao?.emoji ?? s.emoji ?? '🔊';
+  const tile = document.querySelector(`.tile[data-fala="${CSS.escape(s.de)}"]`);
+  if (tile) {
+    const bolha = el('div', 'bolha-som', emoji);
+    tile.append(bolha);
+    setTimeout(() => bolha.remove(), 1800);
+  }
+  const url = s.padrao ? (padrao ? await gerarSomPadrao(s.padrao) : null) : s.url;
+  if (!url || !volumeSons) return;
+  const a = new Audio(url);
+  a.volume = volumeSons;
+  aplicarSaida(a);
+  a.play().catch(() => {});
+});
+
+$('#btn-novo-som').onclick = (e) => {
+  e.stopPropagation();
+  $('#form-som').reset();
+  $('#form-som').hidden = false;
+  $('#btn-novo-som').hidden = true;
+};
+$('#btn-cancelar-som').onclick = () => {
+  $('#form-som').hidden = true;
+  $('#btn-novo-som').hidden = false;
+};
+$('#som-arquivo').onchange = () => {
+  const f = $('#som-arquivo').files[0];
+  if (f && !$('#som-nome').value) $('#som-nome').value = f.name.replace(/\.[^.]+$/, '').slice(0, 24);
+};
+$('#form-som').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = $('#som-arquivo').files[0];
+  if (!f) return;
+  if (f.size > 1024 * 1024) return avisar('Som grande demais (máx. 1 MB).');
+  // duração: som de soundboard é curto
+  const duracao = await new Promise((resolve) => {
+    const a = new Audio(URL.createObjectURL(f));
+    a.onloadedmetadata = () => resolve(a.duration);
+    a.onerror = () => resolve(NaN);
+  });
+  if (Number.isNaN(duracao)) return avisar('Não consegui ler esse áudio. Tenta mp3, ogg ou wav.');
+  if (duracao > 7.5) return avisar(`Esse som tem ${Math.round(duracao)} segundos. O máximo é 7.`);
+  const btn = $('#btn-salvar-som');
+  btn.disabled = true;
+  socket.timeout(30000).emit('som:enviar', {
+    servidor: sonsServidor.servidor,
+    nome: $('#som-nome').value,
+    emoji: [...$('#som-emoji').value.trim()].slice(0, 2).join('') || '🔊',
+    dados: await f.arrayBuffer(),
+  }, (err, r) => {
+    btn.disabled = false;
+    if (err) return avisar('Não deu pra enviar (conexão lenta?).');
+    if (r?.erro) return avisar(r.erro);
+    $('#form-som').hidden = true;
+    $('#btn-novo-som').hidden = false;
+  });
+};
 
 function fecharPopovers() {
   $$('.popover').forEach((e) => (e.hidden = true));

@@ -54,6 +54,8 @@ const STATUS = ['online', 'ausente', 'ocupado', 'invisivel'];
 // Um emoji (com tom de pele, variação e combinações tipo 👨‍👩‍👧)
 const EMOJI_RE = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3)(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}]|\u200D\p{Extended_Pictographic}\uFE0F?)*$/u;
 // Arquivos que o navegador mostra direto; o resto sempre baixa (nunca abre como página)
+const MAX_SOM = 1024 * 1024; // soundboard: sons curtos
+const MAX_SONS = 48; // por servidor
 const EXT_EXIBIVEIS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mov', 'mp3', 'ogg', 'wav', 'm4a', 'pdf', 'txt']);
 
 function limparNomeArquivo(nome) {
@@ -126,6 +128,17 @@ function criarLimitador() {
   };
 }
 
+// Formato do som pela assinatura (mp3, ogg, wav, m4a, webm)
+function extensaoDoSom(buf) {
+  const h = buf.subarray(0, 12);
+  if (h.toString('ascii', 0, 3) === 'ID3' || (h[0] === 0xff && (h[1] & 0xe0) === 0xe0)) return 'mp3';
+  if (h.toString('ascii', 0, 4) === 'OggS') return 'ogg';
+  if (h.toString('ascii', 0, 4) === 'RIFF' && h.toString('ascii', 8, 12) === 'WAVE') return 'wav';
+  if (h.toString('ascii', 4, 8) === 'ftyp') return 'm4a';
+  if (h[0] === 0x1a && h[1] === 0x45 && h[2] === 0xdf && h[3] === 0xa3) return 'webm';
+  return null;
+}
+
 // Descobre o tipo pela assinatura do arquivo (não confia no nome)
 function extensaoDaImagem(buf) {
   const h = buf.subarray(0, 12);
@@ -192,6 +205,15 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       admin INTEGER NOT NULL DEFAULT 0,
       entrou_em INTEGER NOT NULL,
       PRIMARY KEY (servidor, conta)
+    );
+    CREATE TABLE IF NOT EXISTS sons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      servidor INTEGER NOT NULL,
+      nome TEXT NOT NULL,
+      emoji TEXT NOT NULL,
+      url TEXT NOT NULL,
+      conta INTEGER NOT NULL,
+      criado_em INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS reacoes (
       mensagem INTEGER NOT NULL,
@@ -271,6 +293,12 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     buscar: db.prepare(`SELECT m.* FROM mensagens m JOIN json_each(?) c ON c.value = m.canal_id
       WHERE m.texto LIKE ? ESCAPE '\\' AND m.texto NOT LIKE '/uploads/%' ORDER BY m.id DESC LIMIT 25`),
     reacoes: db.prepare('SELECT emoji, conta FROM reacoes WHERE mensagem = ? ORDER BY rowid'),
+    sonsDo: db.prepare('SELECT id, nome, emoji, url, conta FROM sons WHERE servidor = ? ORDER BY id'),
+    som: db.prepare('SELECT * FROM sons WHERE id = ?'),
+    contarSons: db.prepare('SELECT COUNT(*) AS n FROM sons WHERE servidor = ?'),
+    criarSom: db.prepare('INSERT INTO sons (servidor, nome, emoji, url, conta, criado_em) VALUES (?, ?, ?, ?, ?, ?)'),
+    apagarSom: db.prepare('DELETE FROM sons WHERE id = ?'),
+    apagarSonsDo: db.prepare('DELETE FROM sons WHERE servidor = ?'),
     temReacao: db.prepare('SELECT 1 FROM reacoes WHERE mensagem = ? AND conta = ? AND emoji = ?'),
     emojisDiferentes: db.prepare('SELECT COUNT(DISTINCT emoji) AS n FROM reacoes WHERE mensagem = ?'),
     reagir: db.prepare('INSERT INTO reacoes (mensagem, conta, emoji) VALUES (?, ?, ?)'),
@@ -716,6 +744,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       });
       sql.apagarMembros.run(s.id);
       sql.apagarServidor.run(s.id);
+      sql.apagarSonsDo.run(s.id);
       io.to(sala(s.id)).emit('servidor:removido', { id: s.id, nome: s.nome });
       io.in(sala(s.id)).socketsLeave(sala(s.id));
       for (const o of usuarios.values()) if (o.servidor === s.id) o.servidor = null;
@@ -1051,6 +1080,62 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const outros = [...usuarios.values()].filter((o) => o.voz === c.id && o.id !== u.id).map((o) => o.id);
       emitirPresenca();
       ack(outros);
+    });
+
+    // ---------- soundboard: sons do servidor da sala, tocados pra todo mundo na chamada ----------
+    const emitirSons = (srv) => io.to(sala(srv)).emit('sons', { servidor: srv, sons: sql.sonsDo.all(srv) });
+    quando('sons:lista', (u, srv, ack) => {
+      srv = Number(srv);
+      if (!ehMembro(srv, u.conta)) return ack({ erro: 'Você não está nesse servidor' });
+      ack({ sons: sql.sonsDo.all(srv) });
+    });
+    quando('som:enviar', async (u, { servidor: srv, nome, emoji, dados } = {}, ack) => {
+      srv = Number(srv);
+      if (!ehMembro(srv, u.conta)) return ack({ erro: 'Você não está nesse servidor' });
+      if (sql.contarSons.get(srv).n >= MAX_SONS) return ack({ erro: `O servidor já tem ${MAX_SONS} sons. Apague algum antes.` });
+      nome = String(nome ?? '').replace(/[\p{C}]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+      if (!nome) return ack({ erro: 'Dá um nome pro som' });
+      emoji = typeof emoji === 'string' && EMOJI_RE.test(emoji) ? emoji : '🔊';
+      if (!Buffer.isBuffer(dados) || !dados.length) return ack({ erro: 'Arquivo vazio' });
+      if (dados.length > MAX_SOM) return ack({ erro: 'Som grande demais (máx. 1 MB, uns segundos)' });
+      const ext = extensaoDoSom(dados);
+      if (!ext) return ack({ erro: 'Formato não suportado (use mp3, ogg, wav ou m4a)' });
+      const arquivo = `som-${randomBytes(12).toString('hex')}.${ext}`;
+      try {
+        await fs.promises.writeFile(path.join(pastaUploads, arquivo), dados);
+      } catch {
+        return ack({ erro: 'Não consegui salvar o som' });
+      }
+      sql.criarSom.run(srv, nome, emoji, `/uploads/${arquivo}`, u.conta, Date.now());
+      emitirSons(srv);
+      ack({});
+    });
+    quando('som:apagar', (u, id, ack) => {
+      const som = sql.som.get(Number(id));
+      if (!som) return ack({});
+      if (som.conta !== u.conta && !ehAdminDe(som.servidor, u.conta)) return ack({ erro: 'Só quem enviou ou um admin pode apagar' });
+      sql.apagarSom.run(som.id);
+      fs.promises.unlink(path.join(pastaUploads, path.basename(som.url))).catch(() => {});
+      emitirSons(som.servidor);
+      ack({});
+    });
+    // `som` = id de um som do servidor, ou o nome de um som que já vem no app
+    let ultimoSom = 0;
+    quando('som:tocar', (u, som, ack) => {
+      const c = u.voz != null && sql.canal.get(u.voz);
+      if (!c) return ack({ erro: 'Entra numa sala de voz pra tocar sons' });
+      if (Date.now() - ultimoSom < 1000) return ack({ erro: 'Calma, um som por vez' });
+      let dados;
+      if (typeof som === 'string' && /^[a-z]{1,20}$/.test(som)) {
+        dados = { padrao: som };
+      } else {
+        const s = sql.som.get(Number(som));
+        if (!s || s.servidor !== c.servidor) return ack({ erro: 'Esse som não existe mais' });
+        dados = { id: s.id, url: s.url, nome: s.nome, emoji: s.emoji };
+      }
+      ultimoSom = Date.now();
+      for (const o of usuarios.values()) if (o.voz === u.voz) io.to(o.socket).emit('som', { de: u.id, ...dados });
+      ack({});
     });
 
     quando('voz:sair', (u) => {

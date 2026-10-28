@@ -143,6 +143,7 @@
             <button class="btn-redondo btn-tela" title="Compartilhar tela" data-icone="tela"></button>
             <button class="btn-redondo btn-mudo" title="Silenciar"></button>
             <button class="btn-redondo" id="btn-tira" title="Esconder participantes" data-icone="membros" hidden></button>
+            <button class="btn-redondo" id="btn-sons" title="Soundboard: tocar um som pra todo mundo da chamada" data-icone="sons"></button>
             <button class="btn-redondo perigo btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
           </div>
         </section>
@@ -334,6 +335,26 @@
     <button type="button" class="menu-botao" id="ms-editar-perfil">Editar perfil e configurações</button>
   </div>
   <div id="menu-pessoa" class="popover" hidden></div>
+  <div id="painel-sons" class="popover" hidden>
+    <header>
+      <h3>Soundboard</h3>
+      <label class="vol-sons" title="Volume dos sons (só pra você)"><span data-icone="volume"></span><input type="range" id="vol-sons" min="0" max="1" step="0.05"></label>
+    </header>
+    <div id="lista-sons"></div>
+    <form id="form-som" hidden>
+      <input type="file" id="som-arquivo" accept="audio/*,.mp3,.ogg,.wav,.m4a" required>
+      <div class="linha-som">
+        <input id="som-emoji" maxlength="8" value="🔊" title="Emoji do botão" autocomplete="off">
+        <input id="som-nome" maxlength="24" placeholder="Nome do som" required autocomplete="off">
+      </div>
+      <small>Até 1 MB e 7 segundos (mp3, ogg, wav ou m4a)</small>
+      <div class="acoes-som">
+        <button type="button" class="btn-secundario" id="btn-cancelar-som">Cancelar</button>
+        <button class="btn-primario" id="btn-salvar-som">Adicionar</button>
+      </div>
+    </form>
+    <button type="button" class="menu-botao" id="btn-novo-som">+ Adicionar som do servidor</button>
+  </div>
   <div id="previa-tela" hidden></div>
 
   <div id="modal-novidades" class="modal" hidden>

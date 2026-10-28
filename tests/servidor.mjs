@@ -148,6 +148,30 @@ ok('expulso não lê mais', (await emit(ana, 'historico', geral)).length === 0);
 ok('mas a DM continua', (await emit(ana, 'historico', dm.id)).length === 1);
 ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id === srv1);
 
+// ---------- soundboard ----------
+{
+  const voz = aberto.servidor.canais.find((c) => c.tipo === 'voz').id;
+  const wav = Buffer.concat([Buffer.from('RIFF\0\0\0\0WAVEfmt '), Buffer.alloc(64)]);
+  ok('fora da chamada não toca som', !!(await emit(leo, 'som:tocar', 'buzina')).erro);
+  ok('quem não é membro não envia som', !!(await emit(bia, 'som:enviar', { servidor: srv1, nome: 'x', dados: wav })).erro);
+  ok('arquivo que não é áudio é recusado', !!(await emit(leo, 'som:enviar', { servidor: srv1, nome: 'x', dados: Buffer.from('<html>') })).erro);
+  const aviso = proximo(ana, 'sons');
+  ok('envia som', !(await emit(leo, 'som:enviar', { servidor: srv1, nome: 'Festa', emoji: '🎉', dados: wav })).erro);
+  const { sons } = await aviso;
+  ok('membros recebem a lista nova', sons.length === 1 && sons[0].nome === 'Festa' && sons[0].url.endsWith('.wav'));
+  await emit(leo, 'voz:entrar', voz);
+  await emit(ana, 'voz:entrar', voz);
+  const ouviu = proximo(ana, 'som');
+  ok('toca som do servidor', !(await emit(leo, 'som:tocar', sons[0].id)).erro);
+  ok('quem está na sala ouve', (await ouviu)?.url === sons[0].url);
+  ok('um som por vez', !!(await emit(leo, 'som:tocar', 'buzina')).erro);
+  ok('só quem enviou (ou admin) apaga', !!(await emit(ana, 'som:apagar', sons[0].id)).erro);
+  ok('quem enviou apaga', !(await emit(leo, 'som:apagar', sons[0].id)).erro && (await emit(leo, 'sons:lista', srv1)).sons.length === 0);
+  leo.emit('voz:sair');
+  ana.emit('voz:sair');
+  await espera(200);
+}
+
 // ---------- backup e reinício ----------
 ok('backup do dia criado', fs.readdirSync(path.join(dados, 'backups')).some((f) => /^chat-\d{4}-\d{2}-\d{2}\.db$/.test(f)));
 [leo, ana, bia].forEach((s) => s.disconnect());
