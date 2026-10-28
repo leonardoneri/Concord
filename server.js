@@ -57,6 +57,8 @@ const EMOJI_RE = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[#*0-9
 const MAX_SOM = 1024 * 1024; // soundboard: sons curtos
 const MAX_EMOJI = 256 * 1024; // emoji do servidor (imagem pequena)
 const MAX_EMOJIS = 60; // por servidor
+const MAX_CARGOS = 20; // por servidor
+const COR_RE = /^#[0-9a-f]{6}$/i;
 const EMOJI_NOME_RE = /^[a-z0-9_]{2,32}$/;
 const EMOJI_CUSTOM_RE = /^:([a-z0-9_]{2,32}):$/;
 const DURA_EVENTO = 3 * 60 * 60 * 1000; // evento some da lista 3 h depois de começar
@@ -75,7 +77,6 @@ function limparNomeArquivo(nome) {
 }
 const MAX_TEXTO = 2000;
 const MAX_BIO = 190;
-const COR_RE = /^#[0-9a-f]{6}$/i;
 
 // ---------- contas ----------
 const scryptAsync = promisify(scrypt);
@@ -247,6 +248,24 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       entrou_em INTEGER NOT NULL,
       PRIMARY KEY (servidor, conta)
     );
+    CREATE TABLE IF NOT EXISTS cargos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      servidor INTEGER NOT NULL,
+      nome TEXT NOT NULL,
+      cor TEXT NOT NULL,
+      posicao INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS membro_cargos (
+      servidor INTEGER NOT NULL,
+      conta INTEGER NOT NULL,
+      cargo INTEGER NOT NULL,
+      PRIMARY KEY (conta, cargo)
+    );
+    CREATE TABLE IF NOT EXISTS canal_cargos (
+      canal INTEGER NOT NULL,
+      cargo INTEGER NOT NULL,
+      PRIMARY KEY (canal, cargo)
+    );
     CREATE TABLE IF NOT EXISTS emojis (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       servidor INTEGER NOT NULL,
@@ -300,7 +319,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       status: "TEXT NOT NULL DEFAULT 'online'", status_texto: "TEXT NOT NULL DEFAULT ''",
     },
     mensagens: { conta: 'INTEGER', editado_em: 'INTEGER', fixada: 'INTEGER NOT NULL DEFAULT 0', canal_id: 'INTEGER', resposta: 'INTEGER', enquete: 'TEXT' },
-    canais: { servidor: 'INTEGER' },
+    canais: { servidor: 'INTEGER', privado: 'INTEGER NOT NULL DEFAULT 0' },
   };
   for (const [tabela, colunas] of Object.entries(colunasNovas)) {
     const existentes = new Set(db.prepare(`PRAGMA table_info(${tabela})`).all().map((c) => c.name));
@@ -370,6 +389,28 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     criarSom: db.prepare('INSERT INTO sons (servidor, nome, emoji, url, conta, criado_em) VALUES (?, ?, ?, ?, ?, ?)'),
     apagarSom: db.prepare('DELETE FROM sons WHERE id = ?'),
     apagarSonsDo: db.prepare('DELETE FROM sons WHERE servidor = ?'),
+    // cargos (ordem = posicao: o primeiro é o "mais alto", que dá a cor do nome)
+    cargosDo: db.prepare('SELECT id, nome, cor FROM cargos WHERE servidor = ? ORDER BY posicao, id'),
+    cargo: db.prepare('SELECT * FROM cargos WHERE id = ?'),
+    criarCargo: db.prepare('INSERT INTO cargos (servidor, nome, cor, posicao) VALUES (?, ?, ?, (SELECT COALESCE(MAX(posicao), -1) + 1 FROM cargos WHERE servidor = ?))'),
+    editarCargo: db.prepare('UPDATE cargos SET nome = ?, cor = ? WHERE id = ?'),
+    posicaoCargo: db.prepare('UPDATE cargos SET posicao = ? WHERE id = ?'),
+    apagarCargo: db.prepare('DELETE FROM cargos WHERE id = ?'),
+    tirarCargoDeTodos: db.prepare('DELETE FROM membro_cargos WHERE cargo = ?'),
+    tirarCargoDosCanais: db.prepare('DELETE FROM canal_cargos WHERE cargo = ?'),
+    cargosDosMembros: db.prepare(`SELECT mc.conta, mc.cargo FROM membro_cargos mc JOIN cargos c ON c.id = mc.cargo
+      WHERE mc.servidor = ? ORDER BY c.posicao, c.id`),
+    darCargo: db.prepare('INSERT OR IGNORE INTO membro_cargos (servidor, conta, cargo) VALUES (?, ?, ?)'),
+    tirarCargo: db.prepare('DELETE FROM membro_cargos WHERE conta = ? AND cargo = ?'),
+    tirarCargosDe: db.prepare('DELETE FROM membro_cargos WHERE servidor = ? AND conta = ?'),
+    apagarCargosDo: db.prepare('DELETE FROM cargos WHERE servidor = ?'),
+    apagarMembroCargosDo: db.prepare('DELETE FROM membro_cargos WHERE servidor = ?'),
+    // canais privados: quem tem um dos cargos liberados (admins sempre veem)
+    cargosDoCanal: db.prepare('SELECT cargo FROM canal_cargos WHERE canal = ?'),
+    liberarCanal: db.prepare('INSERT OR IGNORE INTO canal_cargos (canal, cargo) VALUES (?, ?)'),
+    limparAcessoDoCanal: db.prepare('DELETE FROM canal_cargos WHERE canal = ?'),
+    privarCanal: db.prepare('UPDATE canais SET privado = ? WHERE id = ?'),
+    temAcesso: db.prepare('SELECT 1 FROM canal_cargos cc JOIN membro_cargos mc ON mc.cargo = cc.cargo WHERE cc.canal = ? AND mc.conta = ?'),
     emojisDo: db.prepare('SELECT nome, url FROM emojis WHERE servidor = ? ORDER BY nome'),
     emojiDo: db.prepare('SELECT * FROM emojis WHERE servidor = ? AND nome = ?'),
     contarEmojis: db.prepare('SELECT COUNT(*) AS n FROM emojis WHERE servidor = ?'),
@@ -500,12 +541,16 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   }
 
   const resumoServidor = ({ id, nome, icone, dono }) => ({ id, nome, icone, dono });
-  function estadoServidor(id) {
+  // `conta`: só os canais que essa pessoa pode ver (canais privados)
+  function estadoServidor(id, conta) {
     const s = sql.servidor.get(id);
     return {
       ...resumoServidor(s),
       convite: s.convite,
-      canais: sql.canaisDo.all(id).map(({ id: cid, tipo, nome, topico }) => ({ id: cid, tipo, nome, topico })),
+      canais: sql.canaisDo.all(id).filter((c) => podeVerCanal(c, conta)).map(({ id: cid, tipo, nome, topico, privado }) => ({
+        id: cid, tipo, nome, topico, privado: !!privado, cargos: privado ? sql.cargosDoCanal.all(cid).map((x) => x.cargo) : [],
+      })),
+      cargos: sql.cargosDo.all(id),
       eventos: sql.eventosDo.all(id, Date.now() - DURA_EVENTO).map(eventoPublico),
       emojis: sql.emojisDo.all(id),
     };
@@ -519,7 +564,14 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   }
   function perfisDo(id) {
     const dono = sql.servidor.get(id)?.dono;
-    return sql.perfis.all(id).map((p) => ({ ...p, cor: corDaConta(p), admin: !!p.admin || p.id === dono, dono: p.id === dono }));
+    const cargos = new Map();
+    for (const { conta, cargo } of sql.cargosDosMembros.all(id)) {
+      if (!cargos.has(conta)) cargos.set(conta, []);
+      cargos.get(conta).push(cargo);
+    }
+    return sql.perfis.all(id).map((p) => ({
+      ...p, cor: corDaConta(p), admin: !!p.admin || p.id === dono, dono: p.id === dono, cargos: cargos.get(p.id) ?? [],
+    }));
   }
   function reacoesDe(id) {
     const porEmoji = new Map();
@@ -558,7 +610,11 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   const ehDm = (c) => c.tipo === 'dm';
   const contasDoDm = (c) => c.nome.split(':').map(Number);
   const nomeDm = (a, b) => `${Math.min(a, b)}:${Math.max(a, b)}`;
-  const podeVerCanal = (c, conta) => (ehDm(c) ? contasDoDm(c).includes(conta) : ehMembro(c.servidor, conta));
+  const podeVerCanal = (c, conta) => {
+    if (ehDm(c)) return contasDoDm(c).includes(conta);
+    if (!ehMembro(c.servidor, conta)) return false;
+    return !c.privado || ehAdminDe(c.servidor, conta) || !!sql.temAcesso.get(c.id, conta);
+  };
   const perfilBasico = (c) => c && { id: c.id, nome: c.nome, cor: corDaConta(c), avatar: c.avatar, bio: c.bio };
   const dmsDa = (conta) => sql.dmsDa.all(`${conta}:%`, `%:${conta}`);
   function dmPublico(c, conta) {
@@ -626,7 +682,24 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       io.to(eu.socket).emit('presenca', lista.map(publico));
     }
   }
-  const emitirServidor = (srv) => io.to(sala(srv)).emit('servidor', estadoServidor(srv));
+  // cada um recebe só os canais que pode ver
+  function emitirServidor(srv) {
+    const porConta = new Map();
+    for (const sid of io.sockets.adapter.rooms.get(sala(srv)) ?? []) {
+      const u = usuarios.get(sid);
+      if (!u) continue;
+      if (!porConta.has(u.conta)) porConta.set(u.conta, estadoServidor(srv, u.conta));
+      io.to(sid).emit('servidor', porConta.get(u.conta));
+    }
+  }
+  // cargos/admin/canal privado mudaram: atualiza a lista de canais e tira da call quem perdeu acesso à sala
+  function acessoMudou(srv) {
+    emitirServidor(srv);
+    const privadas = canaisDe(srv, 'voz').filter((c) => c.privado);
+    tirarDaVoz((o) => privadas.some((c) => c.id === o.voz && !podeVerCanal(c, o.conta)));
+    limparAssistir();
+    emitirPresenca();
+  }
   const emitirPerfis = (srv) => io.to(sala(srv)).emit('perfis', { servidor: srv, perfis: perfisDo(srv) });
   const emitirPerfisDaConta = (conta) => sql.servidoresDa.all(conta).forEach((s) => emitirPerfis(s.id));
   const socketsDaConta = (conta) => [...usuarios.values()].filter((u) => u.conta === conta).map((u) => io.sockets.sockets.get(u.socket)).filter(Boolean);
@@ -638,6 +711,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   // Tira alguém do servidor (saiu ou foi expulso)
   function removerMembro(srv, conta) {
     sql.sairServidor.run(srv, conta);
+    sql.tirarCargosDe.run(srv, conta);
     socketsDaConta(conta).forEach((so) => so.leave(sala(srv)));
     const canaisVoz = new Set(canaisDe(srv, 'voz').map((c) => c.id));
     tirarDaVoz((o) => o.conta === conta && canaisVoz.has(o.voz));
@@ -650,6 +724,11 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   function emitirNoCanal(c, evento, dados, semSocket = null) {
     if (ehDm(c)) {
       for (const conta of contasDoDm(c)) socketsDaConta(conta).forEach((so) => so.id !== semSocket && so.emit(evento, dados));
+    } else if (c.privado) {
+      for (const sid of io.sockets.adapter.rooms.get(sala(c.servidor)) ?? []) {
+        const u = usuarios.get(sid);
+        if (sid !== semSocket && u && podeVerCanal(c, u.conta)) io.to(sid).emit(evento, dados);
+      }
     } else if (semSocket) {
       io.sockets.sockets.get(semSocket)?.to(sala(c.servidor)).emit(evento, dados);
     } else {
@@ -831,7 +910,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       id = Number(id);
       if (!ehMembro(id, u.conta)) return ack({ erro: 'Você não está nesse servidor' });
       u.servidor = id;
-      ack({ servidor: estadoServidor(id), perfis: perfisDo(id) });
+      ack({ servidor: estadoServidor(id, u.conta), perfis: perfisDo(id) });
       emitirPresenca();
     });
 
@@ -880,6 +959,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const canaisVoz = new Set(canais.filter((c) => c.tipo === 'voz').map((c) => c.id));
       tirarDaVoz((o) => canaisVoz.has(o.voz));
       canais.forEach((c) => {
+        sql.limparAcessoDoCanal.run(c.id);
         sql.apagarReacoesDoCanal.run(c.id);
         sql.apagarVotosDoCanal.run(c.id);
         sql.apagarMensagensDoCanal.run(c.id);
@@ -889,6 +969,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       sql.apagarServidor.run(s.id);
       sql.apagarSonsDo.run(s.id);
       sql.apagarEmojisDo.run(s.id);
+      sql.apagarCargosDo.run(s.id);
+      sql.apagarMembroCargosDo.run(s.id);
       sql.apagarEventosDo.run(s.id);
       io.to(sala(s.id)).emit('servidor:removido', { id: s.id, nome: s.nome });
       io.in(sala(s.id)).socketsLeave(sala(s.id));
@@ -943,6 +1025,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (sql.servidor.get(srv).dono === conta) return ack({ erro: 'O dono é sempre admin' });
       sql.definirAdmin.run(admin ? 1 : 0, srv, conta);
       emitirPerfis(srv);
+      acessoMudou(srv);
       ack({});
     });
 
@@ -1068,6 +1151,80 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       ack({ nome: limpo.nome });
     });
 
+    // privado = só admins e quem tem um dos `cargos` vê o canal
+    quando('canal:acesso', (u, { id, privado, cargos } = {}, ack) => {
+      const canal = canalDoAdmin(u, id);
+      if (!canal) return ack({ erro: 'Só admin pode fazer isso' });
+      const validos = new Set(sql.cargosDo.all(canal.servidor).map((c) => c.id));
+      sql.privarCanal.run(privado ? 1 : 0, canal.id);
+      sql.limparAcessoDoCanal.run(canal.id);
+      if (privado) for (const c of Array.isArray(cargos) ? cargos : []) if (validos.has(Number(c))) sql.liberarCanal.run(canal.id, Number(c));
+      acessoMudou(canal.servidor);
+      ack({});
+    });
+
+    // ---------- cargos (nome colorido; liberam canais privados) ----------
+    const cargoDoServidor = (id, srv) => {
+      const c = sql.cargo.get(Number(id));
+      return c?.servidor === srv ? c : null;
+    };
+    const mudouCargos = (srv) => {
+      emitirPerfis(srv);
+      acessoMudou(srv);
+    };
+    quandoAdmin('cargo:criar', (u, { nome, cor } = {}, ack, srv) => {
+      nome = limparLinha(nome, 24);
+      if (!nome) return ack({ erro: 'Dá um nome pro cargo' });
+      if (!COR_RE.test(cor ?? '')) return ack({ erro: 'Cor inválida' });
+      const lista = sql.cargosDo.all(srv);
+      if (lista.length >= MAX_CARGOS) return ack({ erro: `Limite de ${MAX_CARGOS} cargos` });
+      if (lista.some((c) => c.nome.toLowerCase() === nome.toLowerCase())) return ack({ erro: `Já existe o cargo "${nome}"` });
+      const { lastInsertRowid } = sql.criarCargo.run(srv, nome, cor, srv);
+      mudouCargos(srv);
+      ack({ id: Number(lastInsertRowid) });
+    });
+    quandoAdmin('cargo:editar', (u, { id, nome, cor } = {}, ack, srv) => {
+      const c = cargoDoServidor(id, srv);
+      if (!c) return ack({ erro: 'Cargo não encontrado' });
+      nome = nome == null ? c.nome : limparLinha(nome, 24);
+      cor = cor ?? c.cor;
+      if (!nome) return ack({ erro: 'Dá um nome pro cargo' });
+      if (!COR_RE.test(cor)) return ack({ erro: 'Cor inválida' });
+      if (sql.cargosDo.all(srv).some((x) => x.id !== c.id && x.nome.toLowerCase() === nome.toLowerCase())) return ack({ erro: `Já existe o cargo "${nome}"` });
+      sql.editarCargo.run(nome, cor, c.id);
+      mudouCargos(srv);
+      ack({});
+    });
+    quandoAdmin('cargo:mover', (u, { id, direcao } = {}, ack, srv) => {
+      const lista = sql.cargosDo.all(srv);
+      const i = lista.findIndex((c) => c.id === Number(id));
+      const j = i + (direcao < 0 ? -1 : 1);
+      if (i < 0 || j < 0 || j >= lista.length) return ack({});
+      [lista[i], lista[j]] = [lista[j], lista[i]];
+      lista.forEach((c, pos) => sql.posicaoCargo.run(pos, c.id));
+      mudouCargos(srv);
+      ack({});
+    });
+    quandoAdmin('cargo:apagar', (u, id, ack, srv) => {
+      const c = cargoDoServidor(id, srv);
+      if (!c) return ack({});
+      sql.tirarCargoDeTodos.run(c.id);
+      sql.tirarCargoDosCanais.run(c.id);
+      sql.apagarCargo.run(c.id);
+      mudouCargos(srv);
+      ack({});
+    });
+    quandoAdmin('cargo:dar', (u, { conta, cargo, dar } = {}, ack, srv) => {
+      conta = Number(conta);
+      const c = cargoDoServidor(cargo, srv);
+      if (!c) return ack({ erro: 'Cargo não encontrado' });
+      if (!ehMembro(srv, conta)) return ack({ erro: 'Essa pessoa não está no servidor' });
+      if (dar) sql.darCargo.run(srv, conta, c.id);
+      else sql.tirarCargo.run(conta, c.id);
+      mudouCargos(srv);
+      ack({});
+    });
+
     quando('canal:mover', (u, { id, direcao } = {}, ack) => {
       const canal = canalDoAdmin(u, id);
       if (!canal) return ack({ erro: 'Só admin pode fazer isso' });
@@ -1086,6 +1243,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (!canal) return ack({ erro: 'Só admin pode fazer isso' });
       if (canaisDe(canal.servidor, canal.tipo).length <= 1) return ack({ erro: 'Precisa sobrar pelo menos um canal desse tipo' });
       sql.apagarCanal.run(canal.id);
+      sql.limparAcessoDoCanal.run(canal.id);
       if (canal.tipo === 'texto') {
         sql.apagarReacoesDoCanal.run(canal.id);
         sql.apagarVotosDoCanal.run(canal.id);
@@ -1093,7 +1251,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       } else {
         tirarDaVoz((o) => o.voz === canal.id);
       }
-      io.to(sala(canal.servidor)).emit('canal:apagado', { id: canal.id, tipo: canal.tipo, nome: canal.nome, servidor: canal.servidor });
+      emitirNoCanal(canal, 'canal:apagado', { id: canal.id, tipo: canal.tipo, nome: canal.nome, servidor: canal.servidor });
       emitirServidor(canal.servidor);
       emitirPresenca();
       ack({});
@@ -1113,7 +1271,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     quando('buscar', (u, { termo } = {}, ack) => {
       termo = String(termo ?? '').trim();
       if ([...termo].length < 2) return ack({ erro: 'Digite pelo menos 2 letras' });
-      const canais = u.servidor === 'dm' ? dmsDa(u.conta) : u.servidor ? canaisDe(u.servidor, 'texto') : [];
+      const canais = u.servidor === 'dm' ? dmsDa(u.conta) : u.servidor ? canaisDe(u.servidor, 'texto').filter((c) => podeVerCanal(c, u.conta)) : [];
       const ids = JSON.stringify(canais.map((c) => c.id));
       const padrao = `%${termo.slice(0, 100).replace(/[\\%_]/g, (x) => `\\${x}`)}%`;
       ack({ resultados: sql.buscar.all(ids, padrao).map((m) => msgPublica(m)) });

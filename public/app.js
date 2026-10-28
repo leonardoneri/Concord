@@ -27,6 +27,7 @@ function salvarStorage(chave, valor) {
 const CORTE = '<path d="M3 3l18 18" stroke="var(--vermelho)"/>';
 const ICONES = {
   hash: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
+  cadeado: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   voz: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3"/>',
   fone: '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
@@ -636,6 +637,10 @@ $('#ms-sair').onclick = () => {
 const perfilDe = (nome) => estado.perfis.find((p) => p.nome === nome);
 const perfilPorConta = (id) => estado.perfis.find((p) => p.id === id);
 const souAdmin = () => !!perfilPorConta(estado.eu?.conta)?.admin;
+// cargos da pessoa, do mais alto pro mais baixo
+const cargosDe = (perfil) => (perfil?.cargos ?? []).map((id) => estado.servidor?.cargos?.find((c) => c.id === id)).filter(Boolean);
+// nome na cor do cargo mais alto (sem cargo: a cor da pessoa)
+const corDoNome = (perfil, padrao) => cargosDe(perfil)[0]?.cor ?? perfil?.cor ?? padrao;
 const souDono = () => estado.servidor.dono != null && estado.servidor.dono === estado.eu?.conta;
 const canalPorId = (id) => (emDm() ? dmComoCanal(estado.dms.find((d) => d.id === id)) : estado.servidor.canais.find((c) => c.id === id));
 
@@ -1085,6 +1090,7 @@ function renderCanais() {
   $('#canais-texto').replaceChildren(...estado.canaisTexto.map((c) => {
     const li = el('li', 'canal');
     li.append(icone('hash'), el('span', null, c.nome));
+    if (c.privado) li.append(icone('cadeado', 'privado'));
     li.classList.toggle('ativo', estado.view === 'texto' && c.id === estado.canalTexto);
     li.classList.toggle('nao-lido', estado.naoLidos.has(c.id));
     if (estado.canalMencoes.has(c.id)) li.append(contador(1));
@@ -1096,6 +1102,7 @@ function renderCanais() {
     const li = el('li');
     const nome = el('div', 'canal');
     nome.append(icone('voz'), el('span', null, c.nome));
+    if (c.privado) nome.append(icone('cadeado', 'privado'));
     nome.classList.toggle('ativo', estado.view === 'voz' && c.id === estado.voz);
     nome.onclick = () => entrarVoz(c.id);
     const membros = el('ul', 'membros-voz');
@@ -1141,7 +1148,7 @@ function itemMembro(u, online) {
   const li = el('li', online ? 'membro' : 'membro offline');
   const nome = el('span', 'nome');
   const linha = el('span', 'nome-linha', u.nome);
-  linha.style.color = u.cor;
+  linha.style.color = corDoNome(perfilPorConta(u.conta) ?? perfilDe(u.nome), u.cor);
   if (perfilDe(u.nome)?.admin) linha.append(icone('coroa', 'coroa'));
   nome.append(linha);
   if (online && u.jogo) {
@@ -1175,8 +1182,23 @@ function renderMembros() {
   const online = estado.usuarios.filter((u) => perfilPorConta(u.conta)).sort(porNome);
   const nomesOnline = new Set(online.map((u) => u.nome));
   const offline = estado.perfis.filter((p) => !nomesOnline.has(p.nome)).sort(porNome);
+  // online agrupado pelo cargo mais alto (como no Discord); quem não tem cargo fica em "Online"
+  const grupos = new Map((estado.servidor?.cargos ?? []).map((c) => [c.id, []]));
+  const semCargo = [];
+  for (const u of online) {
+    const topo = cargosDe(perfilPorConta(u.conta))[0];
+    (topo ? grupos.get(topo.id) : semCargo).push(u);
+  }
+  const itens = [];
+  for (const c of estado.servidor?.cargos ?? []) {
+    const lista = grupos.get(c.id);
+    if (lista.length) itens.push(el('li', 'titulo-grupo', `${c.nome} — ${lista.length}`), ...lista.map((u) => itemMembro(u, true)));
+  }
+  // sem nenhum grupo de cargo: só o título "Online" de sempre
+  $('#titulo-online').hidden = itens.length > 0;
   $('#titulo-online').textContent = `Online — ${online.length}`;
-  $('#online').replaceChildren(...online.map((u) => itemMembro(u, true)));
+  if (itens.length && semCargo.length) itens.push(el('li', 'titulo-grupo', `Online — ${semCargo.length}`));
+  $('#online').replaceChildren(...itens, ...semCargo.map((u) => itemMembro(u, true)));
   $('#titulo-offline').hidden = !offline.length;
   $('#titulo-offline').textContent = `Offline — ${offline.length}`;
   $('#offline').replaceChildren(...offline.map((p) => itemMembro(p, false)));
@@ -1529,7 +1551,7 @@ function criarMensagem(m, anterior) {
     }
     const cab = el('div', 'cabecalho');
     const autor = el('span', 'autor', m.autor);
-    autor.style.color = perfilDe(m.autor)?.cor ?? m.cor;
+    autor.style.color = corDoNome(perfilDe(m.autor), m.cor);
     autor.onclick = (e) => abrirPerfil(m.autor, e);
     cab.append(autor, el('span', 'hora', fmtCabecalho(data)));
     const av = avatar({ nome: m.autor, cor: m.cor });
@@ -1552,7 +1574,7 @@ function previaResposta(r) {
   }
   const perfil = perfilDe(r.autor);
   const autor = el('span', 'autor', r.autor);
-  autor.style.color = perfil?.cor ?? '';
+  autor.style.color = corDoNome(perfil, '');
   p.append(avatar({ nome: r.autor, cor: perfil?.cor ?? 'var(--acento)' }), autor, el('span', 'resposta-texto', resumoMensagem(r.texto)));
   p.onclick = () => revelar(r.id);
   return p;
@@ -1763,7 +1785,7 @@ function mensagemCompacta(m) {
   const item = el('div', 'fixada-item');
   const cab = el('div', 'cabecalho');
   const autor = el('span', 'autor', m.autor);
-  autor.style.color = perfilDe(m.autor)?.cor ?? m.cor;
+  autor.style.color = corDoNome(perfilDe(m.autor), m.cor);
   cab.append(avatar({ nome: m.autor, cor: m.cor }), autor, el('span', 'hora', fmtCabecalho(new Date(m.criado_em))));
   item.append(cab, formatarTexto(m.texto));
   return item;
@@ -3173,6 +3195,35 @@ function abrirPerfil(nome, evento) {
   if (p?.bio) {
     corpo.append(el('h4', null, 'Sobre mim'), el('p', 'perfil-bio', p.bio));
   }
+  // cargos: admin vê todos e liga/desliga clicando; os outros veem só os da pessoa
+  const todosCargos = estado.servidor?.cargos ?? [];
+  const cargosVisiveis = p && !emDm() ? (souAdmin() ? todosCargos : cargosDe(p)) : [];
+  if (cargosVisiveis.length) {
+    const lista = el('div', 'perfil-cargos');
+    for (const c of cargosVisiveis) {
+      const tem = p.cargos.includes(c.id);
+      const chip = el(souAdmin() ? 'button' : 'span', `cargo-chip${tem ? ' tem' : ''}`);
+      chip.style.setProperty('--cor-cargo', c.cor);
+      chip.append(el('span', 'bolinha'), el('span', null, c.nome));
+      if (souAdmin()) {
+        chip.type = 'button';
+        chip.title = tem ? `Tirar o cargo ${c.nome}` : `Dar o cargo ${c.nome}`;
+        chip.onclick = (e) => {
+          e.stopPropagation();
+          const dar = !chip.classList.contains('tem');
+          chip.classList.toggle('tem', dar);
+          socket.emit('cargo:dar', { conta: p.id, cargo: c.id, dar }, (r) => {
+            if (r?.erro) {
+              chip.classList.toggle('tem', !dar);
+              avisar(r.erro);
+            }
+          });
+        };
+      }
+      lista.append(chip);
+    }
+    corpo.append(el('h4', null, souAdmin() ? 'Cargos (clique pra dar/tirar)' : 'Cargos'), lista);
+  }
 
   const acoes = el('div', 'perfil-acoes');
   if (p && p.id === estado.eu?.conta) {
@@ -3941,6 +3992,86 @@ function abrirModalServidor(focoTipo) {
   if (focoTipo) $(`.srv-novo[data-tipo="${focoTipo}"] input`).focus();
 }
 
+// ---------- cargos (configurações do servidor) ----------
+const acessoAberto = new Set(); // canais com o painel do cadeado aberto
+function renderCargosServidor() {
+  const cargos = estado.servidor.cargos ?? [];
+  $('#srv-cargos').replaceChildren(...(cargos.length ? cargos.map((c, i) => {
+    const li = el('li', 'srv-cargo');
+    const cor = el('input');
+    cor.type = 'color';
+    cor.value = c.cor;
+    cor.title = 'Cor do cargo';
+    cor.onchange = () => socket.emit('cargo:editar', { id: c.id, cor: cor.value }, respostaServidor);
+    const nome = el('input');
+    nome.value = c.nome;
+    nome.maxLength = 24;
+    nome.onchange = () => socket.emit('cargo:editar', { id: c.id, nome: nome.value }, respostaServidor);
+    const qtd = estado.perfis.filter((p) => p.cargos?.includes(c.id)).length;
+    li.append(cor, nome, el('span', 'srv-cargo-n', `${qtd} ${qtd === 1 ? 'pessoa' : 'pessoas'}`));
+    const botao = (ic, titulo, acao, desligado) => {
+      const b = el('button', 'btn-icone');
+      b.type = 'button';
+      b.title = titulo;
+      b.disabled = !!desligado;
+      b.append(icone(ic));
+      b.onclick = acao;
+      li.append(b);
+    };
+    botao('cima', 'Subir (cargo mais alto dá a cor do nome)', () => socket.emit('cargo:mover', { id: c.id, direcao: -1 }, respostaServidor), i === 0);
+    botao('seta', 'Descer', () => socket.emit('cargo:mover', { id: c.id, direcao: 1 }, respostaServidor), i === cargos.length - 1);
+    botao('lixo', 'Apagar cargo', () => {
+      if (confirm(`Apagar o cargo "${c.nome}"? Quem tem perde, e canais liberados só pra ele ficam só pros admins.`)) {
+        socket.emit('cargo:apagar', c.id, respostaServidor);
+      }
+    });
+    return li;
+  }) : [el('p', 'dica-cfg', 'Nenhum cargo ainda.')]));
+}
+$('#form-cargo').onsubmit = (e) => {
+  e.preventDefault();
+  socket.emit('cargo:criar', { nome: $('#cargo-nome').value, cor: $('#cargo-cor').value }, (r) => {
+    if (r?.erro) return avisar(r.erro);
+    $('#cargo-nome').value = '';
+    // próxima cor sugerida
+    const cores = ['#e67e22', '#3498db', '#2ecc71', '#e91e63', '#9b59b6', '#f1c40f', '#1abc9c', '#e74c3c'];
+    $('#cargo-cor').value = cores[(cores.indexOf($('#cargo-cor').value) + 1) % cores.length];
+  });
+};
+
+// painel do cadeado: privado + quais cargos veem
+function painelAcesso(c) {
+  const box = el('div', 'srv-acesso');
+  const marcados = new Set(c.cargos ?? []);
+  const enviar = () => socket.emit('canal:acesso', { id: c.id, privado: privado.checked, cargos: [...marcados] }, respostaServidor);
+  const privado = el('input');
+  privado.type = 'checkbox';
+  privado.checked = !!c.privado;
+  privado.onchange = enviar;
+  const rotulo = el('label', 'srv-acesso-privado');
+  rotulo.append(privado, el('span', null, c.tipo === 'texto' ? 'Canal privado: só admins e os cargos marcados veem' : 'Sala privada: só admins e os cargos marcados veem e entram'));
+  box.append(rotulo);
+  if (c.privado) {
+    const cargos = estado.servidor.cargos ?? [];
+    if (!cargos.length) box.append(el('p', 'dica-cfg', 'Crie cargos aqui embaixo pra liberar o canal pra mais gente além dos admins.'));
+    for (const cargo of cargos) {
+      const marca = el('input');
+      marca.type = 'checkbox';
+      marca.checked = marcados.has(cargo.id);
+      marca.onchange = () => {
+        if (marca.checked) marcados.add(cargo.id);
+        else marcados.delete(cargo.id);
+        enviar();
+      };
+      const r = el('label', 'cargo-chip tem');
+      r.style.setProperty('--cor-cargo', cargo.cor);
+      r.append(marca, el('span', null, cargo.nome));
+      box.append(r);
+    }
+  }
+  return box;
+}
+
 function linhaCanal(c, lista) {
   const li = el('li', 'srv-canal');
   li.append(icone(c.tipo === 'texto' ? 'hash' : 'voz'));
@@ -3967,6 +4098,13 @@ function linhaCanal(c, lista) {
     b.onclick = acao;
     li.append(b);
   };
+  botao('cadeado', c.privado ? 'Canal privado: quem pode ver' : 'Tornar privado', () => {
+    if (acessoAberto.has(c.id)) acessoAberto.delete(c.id);
+    else acessoAberto.add(c.id);
+    renderModalServidor(true);
+  });
+  li.lastChild.classList.toggle('ligado', !!c.privado);
+  if (acessoAberto.has(c.id)) li.classList.add('com-acesso');
   const i = lista.indexOf(c);
   botao('cima', 'Subir', () => moverCanal(c.id, -1), i === 0);
   botao('seta', 'Descer', () => moverCanal(c.id, 1), i === lista.length - 1);
@@ -3976,6 +4114,7 @@ function linhaCanal(c, lista) {
       : `Apagar a sala "${c.nome}"? Quem estiver nela sai da chamada.`;
     if (confirm(aviso)) socket.emit('canal:apagar', c.id, (res) => res?.erro && avisar(res.erro));
   }, lista.length <= 1);
+  if (acessoAberto.has(c.id)) li.append(painelAcesso(c));
   return li;
 }
 
@@ -4006,6 +4145,7 @@ function renderModalServidor(forcar = false) {
     const lista = srv.canais.filter((c) => c.tipo === tipo);
     $(`#srv-canais-${tipo}`).replaceChildren(...lista.map((c) => linhaCanal(c, lista)));
   }
+  renderCargosServidor();
   renderEmojisServidor();
   $('#srv-admins').replaceChildren(...estado.perfis.map((p) => {
     const li = el('li');

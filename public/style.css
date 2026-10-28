@@ -1412,3 +1412,30 @@ textarea {
 .srv-emoji .btn-icone .ic { width: 14px; height: 14px; }
 #form-emoji input[type=file] { flex: 1; min-width: 0; font-size: 13px; }
 #form-emoji #emoji-nome { flex: 1; }
+
+/* ---------- cargos e canais privados ---------- */
+#membros .titulo-grupo { margin: 16px 8px 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; color: var(--texto-2); list-style: none; }
+#membros .titulo-grupo:first-child { margin-top: 0; }
+.canal .ic.privado { width: 13px; height: 13px; margin-left: auto; opacity: .7; flex: none; }
+.perfil-cargos { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.cargo-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 7px; border-radius: 6px; border: 1px solid #3f4147; background: #2b2d31; color: var(--texto-2); font: inherit; font-size: 13px; cursor: default; }
+button.cargo-chip, label.cargo-chip { cursor: pointer; }
+.cargo-chip .bolinha { width: 10px; height: 10px; border-radius: 50%; background: var(--cor-cargo); opacity: .35; }
+.cargo-chip.tem { color: var(--texto); border-color: var(--cor-cargo); }
+.cargo-chip.tem .bolinha { opacity: 1; }
+button.cargo-chip:hover { background: #35373c; }
+.srv-cargos { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; }
+.srv-cargo { display: flex; align-items: center; gap: 6px; background: #2b2d31; border-radius: 6px; padding: 4px; }
+.srv-cargo input:not([type=color]) { flex: 1; padding: 7px 8px; background: #1e1f22; min-width: 0; }
+.srv-cargo .btn-icone { width: 30px; height: 30px; flex: none; }
+.srv-cargo .btn-icone:disabled { opacity: .3; cursor: default; }
+.srv-cargo .btn-icone[title="Apagar cargo"]:hover { color: var(--vermelho); }
+.srv-cargo-n { font-size: 12px; color: var(--texto-2); white-space: nowrap; padding: 0 4px; }
+input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-radius: 6px; background: #1e1f22; cursor: pointer; flex: none; }
+#form-cargo #cargo-nome { flex: 1; }
+.srv-canal.com-acesso { flex-wrap: wrap; }
+.srv-canal .btn-icone.ligado { color: var(--amarelo, #f0b232); }
+.srv-acesso { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 6px 6px; border-top: 1px solid #3f4147; margin-top: 4px; }
+.srv-acesso-privado { flex-basis: 100%; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--texto); cursor: pointer; text-transform: none; font-weight: 400; }
+.srv-acesso .cargo-chip input { margin: 0; }
+.srv-acesso .dica-cfg { margin: 0; }
