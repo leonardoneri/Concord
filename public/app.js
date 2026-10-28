@@ -1918,7 +1918,7 @@ async function entrarVoz(canal) {
     estado.mic = await pegarMic();
   } catch (e) {
     estado.mic = null;
-    avisar(`Sem microfone (${e.message}) — você entrou só ouvindo.`);
+    avisar(`Você entrou só ouvindo. ${explicarErroMic(e)}`, 15000);
   }
   aplicarMudo();
   if (estado.mic) monitorarFala(estado.eu.id, estado.mic);
@@ -2697,6 +2697,7 @@ function abrirAba(aba) {
   $$('.cfg-conteudo section[data-aba]').forEach((s) => (s.hidden = s.dataset.aba !== aba));
   $('#cfg-titulo').textContent = TITULOS_ABA[aba];
   capturando = null;
+  if (aba !== 'voz') pararTesteMic();
   renderAtalhos();
 }
 $$('.cfg-abas [data-aba]').forEach((b) => (b.onclick = () => abrirAba(b.dataset.aba)));
@@ -3384,11 +3385,104 @@ function salvarDispositivo(chave, valor) {
 $('#cfg-mic').onchange = (e) => {
   salvarDispositivo('mic', e.target.value);
   trocarMic();
+  if (testeMic) testarMic(); // reinicia o teste com o microfone novo
 };
 $('#cfg-ruido').onchange = (e) => {
   salvarDispositivo('ruido', e.target.value);
   trocarMic();
+  if (testeMic) testarMic();
 };
+
+// ---------- testar microfone (Configurações → Voz e vídeo) ----------
+// Erro do getUserMedia em português, dizendo o que fazer
+function explicarErroMic(e) {
+  switch (e?.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'O microfone está bloqueado. No Windows: Configurações → Privacidade e segurança → Microfone → ligue "Acesso ao microfone" e "Permitir que aplicativos da área de trabalho acessem o microfone". Depois feche o Concord pela bandeja (botão direito → Sair) e abra de novo.';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'Nenhum microfone encontrado. Confira se ele está conectado e escolha ele em "Dispositivo de entrada".';
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'O Windows não deixou usar o microfone (outro programa travou ele). Tente outro dispositivo, ou no Painel de Som do Windows → Gravação → Propriedades do microfone → Avançado, desmarque "Permitir que aplicativos assumam o controle exclusivo".';
+    default:
+      return `Não deu pra abrir o microfone (${e?.message || e?.name || 'erro desconhecido'}).`;
+  }
+}
+
+let testeMic = null; // { stream, ctx, intervalo, timer, audio, maximo }
+function pararTesteMic() {
+  if (!testeMic) return;
+  clearInterval(testeMic.intervalo);
+  clearTimeout(testeMic.timer);
+  testeMic.stream.getTracks().forEach((t) => t.stop());
+  testeMic.ctx.close().catch(() => {});
+  testeMic.audio?.pause();
+  testeMic = null;
+  $('#btn-testar-mic').textContent = 'Testar microfone';
+  $('#btn-testar-mic').classList.remove('testando');
+  $('#nivel-mic').style.width = '0';
+}
+async function testarMic() {
+  pararTesteMic();
+  const status = $('#status-mic');
+  status.className = '';
+  status.textContent = 'Abrindo o microfone…';
+  let stream;
+  try {
+    stream = await pegarMic();
+  } catch (e) {
+    status.className = 'erro';
+    status.textContent = explicarErroMic(e);
+    return;
+  }
+  const ctx = new AudioContext();
+  ctx.resume().catch(() => {});
+  const analisador = ctx.createAnalyser();
+  analisador.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analisador);
+  const amostras = new Float32Array(analisador.fftSize);
+  const trilha = stream.getAudioTracks()[0];
+  testeMic = { stream, ctx, maximo: 0 };
+  $('#btn-testar-mic').textContent = 'Parar teste';
+  $('#btn-testar-mic').classList.add('testando');
+  status.textContent = `Usando: ${trilha?.label || 'microfone padrão'}. Fale alguma coisa: a barra tem que mexer.`;
+  ouvirMic();
+  const medir = () => {
+    if (!testeMic || testeMic.stream !== stream) return;
+    analisador.getFloatTimeDomainData(amostras);
+    let soma = 0;
+    for (const v of amostras) soma += v * v;
+    const nivel = Math.min(1, Math.sqrt(soma / amostras.length) * 6);
+    testeMic.maximo = Math.max(testeMic.maximo, nivel);
+    const barra = $('#nivel-mic');
+    barra.style.width = `${Math.round(nivel * 100)}%`;
+    barra.classList.toggle('alto', nivel > 0.85);
+  };
+  testeMic.intervalo = setInterval(medir, 50);
+  // depois de uns segundos sem chegar som nenhum, explica
+  testeMic.timer = setTimeout(() => {
+    if (!testeMic || testeMic.stream !== stream || testeMic.maximo > 0.04) return;
+    status.className = 'erro';
+    status.textContent = trilha?.muted
+      ? 'O Windows está mandando o microfone mudo. Confira se ele não está silenciado no Windows ou no botão do próprio fone.'
+      : `Não está chegando som do "${trilha?.label || 'microfone padrão'}". Se você usa outro microfone (tipo o do fone), escolha ele em "Dispositivo de entrada" acima.`;
+  }, 6000);
+}
+function ouvirMic() {
+  if (!testeMic) return;
+  testeMic.audio?.pause();
+  testeMic.audio = null;
+  if (!$('#chk-ouvir-mic').checked) return;
+  const a = new Audio();
+  a.srcObject = testeMic.stream;
+  aplicarSaida(a);
+  a.play().catch(() => {});
+  testeMic.audio = a;
+}
+$('#btn-testar-mic').onclick = () => (testeMic ? pararTesteMic() : testarMic());
+$('#chk-ouvir-mic').onchange = ouvirMic;
 // troca o microfone no meio da chamada sem mudar o id do stream
 async function trocarMic() {
   if (!estado.mic) return;
@@ -3438,10 +3532,18 @@ $('#cfg-cam').onchange = async (e) => {
 };
 
 $('#btn-config').onclick = () => abrirConfig();
-$('#btn-fechar-config').onclick = () => ($('#modal-config').hidden = true);
-$('#modal-config').onclick = (e) => { if (e.target.id === 'modal-config') e.target.hidden = true; };
+$('#btn-fechar-config').onclick = () => {
+  pararTesteMic();
+  $('#modal-config').hidden = true;
+};
+$('#modal-config').onclick = (e) => {
+  if (e.target.id !== 'modal-config') return;
+  pararTesteMic();
+  e.target.hidden = true;
+};
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  pararTesteMic();
   $$('.modal').forEach((m) => (m.hidden = true));
   fecharPopovers();
 });

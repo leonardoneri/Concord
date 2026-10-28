@@ -1300,3 +1300,15 @@ textarea {
   30% { transform: scale(1); }
   100% { transform: translateY(-24px); opacity: 0; }
 }
+
+/* ---------- testar microfone ---------- */
+.teste-mic { display: grid; gap: 8px; padding: 12px; border-radius: 8px; background: var(--sidebar); margin-bottom: 12px; }
+.teste-mic-topo { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+#btn-testar-mic.testando { background: var(--vermelho); color: #fff; }
+.modal-caixa .ouvir-mic { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; text-transform: none; color: var(--texto-2); margin: 0; cursor: pointer; }
+.ouvir-mic input { width: auto; margin: 0; }
+.medidor-mic { height: 10px; border-radius: 5px; background: #0006; overflow: hidden; }
+#nivel-mic { height: 100%; width: 0; border-radius: 5px; background: var(--verde); transition: width .06s linear; }
+#nivel-mic.alto { background: #f0b232; }
+#status-mic { margin: 0; font-size: 13px; color: var(--texto-2); line-height: 1.4; }
+#status-mic.erro { color: #f38b8b; }

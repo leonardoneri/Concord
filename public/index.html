@@ -211,6 +211,14 @@
         </section>
         <section data-aba="voz" hidden>
         <label>Dispositivo de entrada (microfone)<select id="cfg-mic"></select></label>
+        <div class="teste-mic">
+          <div class="teste-mic-topo">
+            <button type="button" class="btn-secundario" id="btn-testar-mic">Testar microfone</button>
+            <label class="ouvir-mic" title="Use fone, senão faz eco"><input type="checkbox" id="chk-ouvir-mic"> Ouvir minha voz (use fone)</label>
+          </div>
+          <div class="medidor-mic"><div id="nivel-mic"></div></div>
+          <p id="status-mic">Fale alguma coisa depois de clicar: a barra tem que mexer.</p>
+        </div>
         <label>Dispositivo de saída<select id="cfg-saida"></select></label>
         <label>Câmera<select id="cfg-cam"></select></label>
         <label>Supressão de ruído
