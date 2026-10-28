@@ -32,7 +32,3 @@ Não quer instalar? Dá pra abrir o link do convite direto no Chrome ou no Edge.
 - **Arquivos:** clique no + ao lado do chat, cole com Ctrl+V ou arraste. Até 25 MB (vídeos tocam direto no chat).
 - **Apertar pra falar e atalhos:** em **Configurações → Voz e atalhos**. Dá pra usar o botão lateral do mouse. No app, funciona até dentro do jogo.
 - **Microfone com barulho?** Em **Configurações → Supressão de ruído**, escolha **Forte**: tira teclado, ventilador e barulho de fundo.
-
-## Pra quem mexe no código
-
-`npm test` roda os testes do servidor (contas, servidores, mensagens, DMs, arquivos, backup).
