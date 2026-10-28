@@ -172,6 +172,10 @@ $('#btn-copiar').onclick = async () => {
 };
 
 // ---------- login ----------
+// Identifica este navegador/app, pra reconexão não ser barrada como "nome repetido"
+const sessao = lerStorage('sessao', null) ?? crypto.getRandomValues(new Uint32Array(4)).join('-');
+salvarStorage('sessao', sessao);
+
 $('#nome').value = lerStorage('nome', '');
 $('#senha').value = lerStorage('senha', '');
 
@@ -188,10 +192,6 @@ $('#form-login').addEventListener('submit', (e) => {
   if (!socket.connected) socket.connect();
   entrar();
 });
-
-// Identifica este navegador/app, pra reconexão não ser barrada como "nome repetido"
-const sessao = lerStorage('sessao', null) ?? crypto.getRandomValues(new Uint32Array(4)).join('-');
-salvarStorage('sessao', sessao);
 
 function entrar() {
   const nome = $('#nome').value.trim();
