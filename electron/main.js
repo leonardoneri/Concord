@@ -6,6 +6,9 @@ import os from 'node:os';
 import { abrirTunel, garantirCloudflared } from './tunel.js';
 import { iniciarAtualizador } from './atualizador.js';
 
+// Servidor fixo da galera (VPS). O app entra direto nele ao abrir. Vazio = sempre mostra o início.
+const SERVIDOR_DA_GALERA = '';
+
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const LAUNCHER = path.join(dir, 'launcher.html');
 const ICONE = path.join(dir, 'icone.png');
@@ -140,11 +143,18 @@ function criarJanela() {
     if (input.key === 'F5') janela.webContents.reload();
   });
 
+  // Links do trycloudflare mudam a cada vez, então não contam como "escolhi outro servidor"
+  const usarGalera = SERVIDOR_DA_GALERA
+    && (!config.servidor || config.servidor === SERVIDOR_DA_GALERA || config.servidor.endsWith('.trycloudflare.com'));
   if (config.abrirAoIniciar) {
     const url = config.abrirAoIniciar;
     delete config.abrirAoIniciar;
     salvarConfig();
     janela.loadURL(url);
+  } else if (usarGalera) {
+    config.servidor = SERVIDOR_DA_GALERA;
+    salvarConfig();
+    janela.loadURL(SERVIDOR_DA_GALERA);
   } else {
     abrirLauncher();
   }
@@ -196,6 +206,7 @@ function escolherFonte(fontes) {
 ipcMain.handle('desktop:config', (e) => {
   if (!doLauncher(e)) return null;
   return {
+    servidorGalera: SERVIDOR_DA_GALERA,
     servidor: config.servidor,
     porta: config.porta,
     senha: config.senha,

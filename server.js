@@ -236,7 +236,10 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const porta = Number(process.env.PORT) || 3000;
   const senha = process.env.SENHA || '';
-  await iniciarServidor({ porta, senha });
-  console.log(`Concord rodando em http://localhost:${porta}`);
+  // HOST=127.0.0.1 quando fica atrás de um proxy (Caddy); DADOS = pasta do chat.db e das imagens
+  const host = process.env.HOST || undefined;
+  const pastaDados = process.env.DADOS || undefined;
+  await iniciarServidor({ porta, senha, host, pastaDados });
+  console.log(`Concord rodando em http://${host ?? 'localhost'}:${porta}`);
   if (senha) console.log('Senha de entrada ativada.');
 }

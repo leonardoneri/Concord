@@ -38,6 +38,18 @@
       background: #2b2d31;
       border-radius: 8px;
     }
+    #galera {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 16px;
+      padding: 14px 16px;
+      background: #2b2d31;
+      border: 1px solid #23a55a66;
+      border-radius: 8px;
+    }
+    #galera span { flex: 1; min-width: 0; display: grid; color: #f2f3f5; }
+    #galera small { color: #949ba4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #continuar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b5bac1; }
     #continuar b { color: #f2f3f5; }
 
@@ -97,6 +109,11 @@
     <img class="logo" src="icone.png" alt="">
     <h1>Concord</h1>
     <p class="sub">Chat, chamada e tela compartilhada com a galera</p>
+
+    <div id="galera" hidden>
+      <span><b>Servidor da galera</b><small id="galera-endereco"></small></span>
+      <button id="btn-galera" class="verde">Entrar</button>
+    </div>
 
     <div id="continuar" hidden>
       <span>Último servidor: <b id="ultimo"></b></span>
@@ -182,7 +199,12 @@
     }
 
     window.desktop.config().then((c) => {
-      if (c.servidor && !/localhost|127\.0\.0\.1/.test(c.servidor)) {
+      if (c.servidorGalera) {
+        $('#galera').hidden = false;
+        $('#galera-endereco').textContent = c.servidorGalera.replace(/^https?:\/\//, '');
+        $('#btn-galera').onclick = () => enviar($('#btn-galera'), () => window.desktop.conectar(c.servidorGalera));
+      }
+      if (c.servidor && c.servidor !== c.servidorGalera && !/localhost|127\.0\.0\.1|trycloudflare/.test(c.servidor)) {
         $('#continuar').hidden = false;
         $('#ultimo').textContent = c.servidor.replace(/^https?:\/\//, '');
         $('#btn-continuar').onclick = () => enviar($('#btn-continuar'), () => window.desktop.conectar(c.servidor));
