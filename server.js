@@ -449,8 +449,10 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   const http = createServer(app);
   const io = new Server(http, { maxHttpBufferSize: MAX_ARQUIVO + 64 * 1024 });
 
-  const usuarios = new Map(); // socket.id -> usuário
-  const previas = new Map(); // socket.id -> miniatura da tela que a pessoa está transmitindo
+  // socket.id -> usuário. O `id` do usuário é a sessão da aba (não o socket): continua o mesmo quando
+  // a conexão cai e volta (ex.: servidor reiniciando), então a chamada WebRTC não precisa recomeçar
+  const usuarios = new Map();
+  const previas = new Map(); // id do usuário -> miniatura da tela que a pessoa está transmitindo
   const sala = (srv) => `s:${srv}`;
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
@@ -471,13 +473,13 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const naCall = (o) => eu.voz != null && o.voz === eu.voz;
       // invisível: some da lista dos outros, menos de quem está na mesma call (precisa pra chamada funcionar)
       const lista = todos.filter((o) => naCall(o) || (membros.has(o.conta) && (o.status !== 'invisivel' || o.id === eu.id)));
-      io.to(eu.id).emit('presenca', lista.map(publico));
+      io.to(eu.socket).emit('presenca', lista.map(publico));
     }
   }
   const emitirServidor = (srv) => io.to(sala(srv)).emit('servidor', estadoServidor(srv));
   const emitirPerfis = (srv) => io.to(sala(srv)).emit('perfis', { servidor: srv, perfis: perfisDo(srv) });
   const emitirPerfisDaConta = (conta) => sql.servidoresDa.all(conta).forEach((s) => emitirPerfis(s.id));
-  const socketsDaConta = (conta) => [...usuarios.values()].filter((u) => u.conta === conta).map((u) => io.sockets.sockets.get(u.id)).filter(Boolean);
+  const socketsDaConta = (conta) => [...usuarios.values()].filter((u) => u.conta === conta).map((u) => io.sockets.sockets.get(u.socket)).filter(Boolean);
   // Lista de servidores (barra da esquerda) de uma conta
   function emitirServidores(conta) {
     const lista = sql.servidoresDa.all(conta).map(resumoServidor);
@@ -511,7 +513,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (o.voz != null && filtro(o)) {
         Object.assign(o, { voz: null, mic: null, camera: null, tela: null });
         previas.delete(o.id);
-        io.to(o.id).emit('voz:expulso');
+        io.to(o.socket).emit('voz:expulso');
       }
     }
   }
@@ -588,23 +590,27 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       socket.disconnect(true);
     });
 
-    socket.on('entrar', ({ token } = {}, ack) => {
+    socket.on('entrar', ({ token, sessao, voltar } = {}, ack) => {
       if (typeof ack !== 'function') return;
       const conta = typeof token === 'string' && sql.contaPorToken.get(hashToken(token));
       if (!conta) return ack({ erro: 'Sua sessão expirou. Entra de novo.', sessaoInvalida: true });
+      // id escolhido pela aba; se for inválido ou de outra conta, usa o do socket
+      let id = typeof sessao === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(sessao) ? sessao : socket.id;
+      if ([...usuarios.values()].some((o) => o.id === id && o.conta !== conta.id)) id = socket.id;
 
       // A mesma conta aberta em outro lugar (ou reconectando antes do servidor perceber a queda): derruba a velha
       for (const o of [...usuarios.values()]) {
-        if (o.conta === conta.id && o.id !== socket.id) {
-          usuarios.delete(o.id);
+        if (o.conta === conta.id && o.socket !== socket.id) {
+          usuarios.delete(o.socket);
           previas.delete(o.id);
-          io.sockets.sockets.get(o.id)?.disconnect(true);
+          io.sockets.sockets.get(o.socket)?.disconnect(true);
         }
       }
 
       usuarios.set(socket.id, {
         conta: conta.id,
-        id: socket.id,
+        id,
+        socket: socket.id,
         nome: conta.nome,
         cor: corDaConta(conta),
         servidor: null, // servidor aberto na tela ('dm' = conversas diretas)
@@ -620,8 +626,21 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       socket.join('todos');
       const servidores = sql.servidoresDa.all(conta.id);
       servidores.forEach((s) => socket.join(sala(s.id)));
+      // reconectou no meio de uma chamada (ex.: servidor reiniciou): volta direto pra sala, do jeito que estava
+      let voz;
+      if (voltar && typeof voltar === 'object') {
+        const c = canalDoMembro(voltar.voz, conta.id, 'voz');
+        voz = null;
+        if (c) {
+          Object.assign(usuarios.get(socket.id), {
+            voz: c.id, mudo: !!voltar.mudo, surdo: !!voltar.surdo,
+            mic: idDeStream(voltar.mic), camera: idDeStream(voltar.camera), tela: idDeStream(voltar.tela),
+          });
+          voz = { outros: [...usuarios.values()].filter((o) => o.voz === c.id && o.id !== id).map((o) => o.id) };
+        }
+      }
       ack({
-        id: socket.id,
+        id,
         conta: conta.id,
         nome: conta.nome,
         usuario: conta.usuario,
@@ -631,6 +650,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         servidores: servidores.map(resumoServidor),
         iceServers: ICE_SERVERS,
         versao: VERSAO,
+        voz,
       });
       emitirPresenca();
     });
@@ -1010,11 +1030,11 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     // ---------- voz ----------
     quando('voz:entrar', (u, canal, ack) => {
       const c = canalDoMembro(canal, u.conta, 'voz');
-      if (!c) return ack([]);
+      if (!c) return ack(null);
       u.voz = c.id;
       u.camera = null;
       u.tela = null;
-      previas.delete(socket.id);
+      previas.delete(u.id);
       const outros = [...usuarios.values()].filter((o) => o.voz === c.id && o.id !== u.id).map((o) => o.id);
       emitirPresenca();
       ack(outros);
@@ -1022,7 +1042,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
 
     quando('voz:sair', (u) => {
       Object.assign(u, { voz: null, mic: null, camera: null, tela: null });
-      previas.delete(socket.id);
+      previas.delete(u.id);
       emitirPresenca();
     });
 
@@ -1032,26 +1052,29 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       u.mic = idDeStream(s.mic);
       u.camera = idDeStream(s.camera);
       u.tela = idDeStream(s.tela);
-      if (!u.tela) previas.delete(socket.id);
+      if (!u.tela) previas.delete(u.id);
       emitirPresenca();
     });
 
     // Repassa oferta/resposta/ICE do WebRTC entre quem está na mesma sala de voz
     quando('sinal', (u, { para, dados } = {}) => {
-      const alvo = usuarios.get(para);
+      const alvo = [...usuarios.values()].find((o) => o.id === para);
       if (u.voz == null || alvo?.voz !== u.voz) return;
-      io.to(para).emit('sinal', { de: socket.id, dados });
+      io.to(alvo.socket).emit('sinal', { de: u.id, dados });
     });
 
     // Miniatura de quem está ao vivo, pra prévia ao passar o mouse (até pra quem não está na call)
     quando('tela:previa', (u, img) => {
-      if (u.tela && typeof img === 'string' && img.length <= MAX_PREVIA && PREVIA_RE.test(img)) previas.set(socket.id, img);
+      if (u.tela && typeof img === 'string' && img.length <= MAX_PREVIA && PREVIA_RE.test(img)) previas.set(u.id, img);
     });
     quando('tela:ver-previa', (u, id, ack) => ack({ img: previas.get(id) ?? null }));
 
     socket.on('disconnect', () => {
-      previas.delete(socket.id);
-      if (usuarios.delete(socket.id)) emitirPresenca();
+      const u = eu();
+      if (!u) return;
+      usuarios.delete(socket.id);
+      previas.delete(u.id);
+      emitirPresenca();
     });
   });
 

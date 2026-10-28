@@ -1,5 +1,14 @@
 [
   {
+    "versao": "1.0.10",
+    "itens": [
+      "A chamada não cai mais quando o servidor é atualizado: a voz, câmera e tela continuam e tudo volta sozinho",
+      "Atualização do site aparece no botão verde na hora, sem precisar fechar o app",
+      "O app procura atualização a cada 10 minutos (antes era a cada 4 horas)",
+      "Esta janela de novidades só aparece depois de atualizar"
+    ]
+  },
+  {
     "versao": "1.0.9",
     "itens": [
       "Configurações organizadas em abas: Minha conta, Perfil, Voz e vídeo, Transmissão, Atalhos e Sobre",

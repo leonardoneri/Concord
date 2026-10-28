@@ -5,7 +5,7 @@ import { app, ipcMain } from 'electron';
 import updater from 'electron-updater';
 
 const { autoUpdater } = updater;
-const INTERVALO = 4 * 60 * 60 * 1000; // procura de novo a cada 4 horas
+const INTERVALO = 10 * 60 * 1000; // procura de novo a cada 10 minutos, com o app aberto
 
 export function iniciarAtualizador({ janela }) {
   // a página pergunta ao carregar (e depois de um F5), então o estado fica guardado aqui

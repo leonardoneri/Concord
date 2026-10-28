@@ -105,6 +105,7 @@ $DOMINIO {
 EOF
 
 passo "TURN (coturn)"
+TURN_ANTES=$(md5sum /etc/turnserver.conf 2>/dev/null)
 cat > /etc/turnserver.conf <<EOF
 listening-port=3478
 listening-ip=$IP_PRIVADO
@@ -142,7 +143,11 @@ netfilter-persistent save >/dev/null
 passo "Ligando tudo"
 systemctl daemon-reload
 systemctl enable -q concord caddy coturn
-systemctl restart concord coturn caddy
+# Só o Concord reinicia sempre. O TURN carrega as chamadas de quem está em 4G/rede fechada:
+# reiniciar ele derrubaria a call, então só quando a configuração mudou.
+systemctl restart concord
+if [ "$TURN_ANTES" != "$(md5sum /etc/turnserver.conf)" ] || ! systemctl is-active -q coturn; then systemctl restart coturn; fi
+systemctl reload caddy 2>/dev/null || systemctl restart caddy
 sleep 3
 if curl -fsS -o /dev/null http://127.0.0.1:3000/; then
   echo "Concord rodando."

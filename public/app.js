@@ -5,6 +5,9 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 // Existe quando roda dentro do app desktop (Electron)
 const appDesktop = window.desktop ?? null;
+// Quem sou eu pros outros na chamada: fica igual quando a conexão cai e volta (o servidor reiniciou),
+// então a call continua sem recomeçar. Muda só se recarregar a página.
+const SESSAO = crypto.randomUUID?.().replace(/-/g, '') ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 function el(tag, cls, texto) {
   const e = document.createElement(tag);
@@ -209,7 +212,8 @@ window.addEventListener('blur', () => { if (!pttGlobal) apertarPtt(false); });
 // ---------- desktop ----------
 
 // Atualização do app já baixada: aparece o botão verde (igual o Discord); clicar reinicia atualizado
-let atualizacaoPronta = null;
+let atualizacaoPronta = null; // app desktop: versão nova já baixada
+let novaVersaoWeb = null; // servidor atualizado com a página aberta
 function mostrarAtualizacao(info) {
   if (!info) return;
   atualizacaoPronta = info;
@@ -217,11 +221,18 @@ function mostrarAtualizacao(info) {
   b.hidden = false;
   b.title = `Atualização pronta (versão ${info.versao}): clique pra reiniciar e atualizar`;
 }
+function mostrarAtualizacaoWeb(versao) {
+  novaVersaoWeb = versao;
+  const b = $('#btn-atualizar');
+  b.hidden = false;
+  if (!atualizacaoPronta) b.title = `Versão ${versao} do Concord disponível: clique pra atualizar (leva 2 segundos)`;
+}
 appDesktop?.atualizacao?.().then(mostrarAtualizacao);
 appDesktop?.aoAtualizacao?.(mostrarAtualizacao);
 $('#btn-atualizar').onclick = () => {
-  if (estado.voz && !confirm('Você está numa chamada. Reiniciar agora pra atualizar? (Leva uns segundos.)')) return;
-  appDesktop?.atualizar();
+  if (estado.voz && !confirm('Você está numa chamada: atualizar agora te tira dela por uns segundos. Atualizar mesmo assim?')) return;
+  if (atualizacaoPronta) appDesktop?.atualizar();
+  else location.reload();
 };
 
 // Avisa o app desktop pra ligar/desligar os atalhos globais (funcionam dentro do jogo)
@@ -370,7 +381,12 @@ $('#form-login').addEventListener('submit', (e) => {
 
 let contaNova = false; // acabou de criar a conta: não mostra novidades
 function entrar() {
-  socket.emit('entrar', { token }, (res) => {
+  // se a conexão caiu no meio de uma chamada, já volta pra ela
+  const voltar = estado.voz ? {
+    voz: estado.voz, mudo: estado.mudo, surdo: estado.surdo,
+    mic: estado.mic?.id ?? null, camera: estado.cam?.id ?? null, tela: estado.tela?.id ?? null,
+  } : null;
+  socket.emit('entrar', { token, sessao: SESSAO, voltar }, (res) => {
     if (res.erro) {
       if (res.sessaoInvalida) {
         token = null;
@@ -383,7 +399,11 @@ function entrar() {
     estado.eu = { id: res.id, conta: res.conta, nome: res.nome, usuario: res.usuario, status: res.status ?? 'online', statusTexto: res.statusTexto ?? '' };
     estado.servidores = res.servidores;
     estado.iceServers = res.iceServers;
-    estado.versao = res.versao ?? null;
+    estado.versao ??= res.versao ?? null; // versão desta página (a das novidades)
+    estado.versaoServidor = res.versao ?? null;
+    // o servidor foi atualizado com a página aberta: oferece recarregar (as novidades aparecem depois disso)
+    if (estado.versao && res.versao && res.versao !== estado.versao) mostrarAtualizacaoWeb(res.versao);
+    if (!primeiraVez && estado.voz) restaurarVoz(res.voz);
     if (primeiraVez) aplicarPrefs(res.prefs);
     $('#login').hidden = true;
     $('#app').hidden = false;
@@ -689,28 +709,73 @@ function sincronizarPrefs() {
   }, 1000);
 }
 
-// Reconectou (ex.: queda de internet): entra de novo automaticamente
+// Reconectou (ex.: queda de internet, servidor atualizando): entra de novo automaticamente
 socket.on('connect', () => { if (estado.eu) entrar(); });
+
+// Sem servidor, a chamada continua (o áudio vai direto entre os PCs): só desiste se demorar demais
+const ESPERA_RECONEXAO = 90_000;
+let quedaTimer = null;
+let silencioSonsAte = 0; // não toca "entrou/saiu" enquanto todo mundo reconecta
 socket.on('disconnect', (motivo) => {
   // o servidor derrubou porque você entrou de novo em outra aba/janela
-  if (motivo === 'io server disconnect' && token) avisar('Sua conta entrou em outro lugar, então esta janela foi desconectada. Aperte F5 pra voltar aqui.', 60000);
-  if (estado.voz) {
-    sairVoz(false);
-    avisar('Conexão caiu — você saiu da chamada.');
+  if (motivo === 'io server disconnect') {
+    if (token) avisar('Sua conta entrou em outro lugar, então esta janela foi desconectada. Aperte F5 pra voltar aqui.', 60000);
+    if (estado.voz) sairVoz(false);
+    return;
   }
+  if (!estado.voz) return;
+  silencioSonsAte = Infinity;
+  avisar('Reconectando ao servidor… a chamada continua.', ESPERA_RECONEXAO);
+  clearTimeout(quedaTimer);
+  quedaTimer = setTimeout(() => {
+    if (socket.connected || !estado.voz) return;
+    sairVoz(false);
+    avisar('Sem conexão com o servidor há muito tempo — você saiu da chamada.');
+  }, ESPERA_RECONEXAO);
 });
 
+// Depois de reconectar: o servidor já me pôs de volta na sala e as conexões com quem estava lá continuam
+function restaurarVoz(voz) {
+  clearTimeout(quedaTimer);
+  silencioSonsAte = Date.now() + 10_000;
+  if (!voz) {
+    sairVoz(false);
+    return avisar('A sala em que você estava não existe mais, então você saiu da chamada.');
+  }
+  for (const id of voz.outros) if (!peers.has(id)) criarPeer(id);
+  if ($('#toast').textContent.startsWith('Reconectando')) $('#toast').hidden = true;
+}
+
 let membrosVoz = new Set();
+const sumidos = new Map(); // id -> timeout: estava na call e sumiu da lista (pode estar só reconectando)
+const ESPERA_SUMIDO = 20_000;
 socket.on('presenca', (lista) => {
-  estado.usuarios = lista;
+  const antes = estado.usuarios;
   for (const id of [...peers.keys()]) {
     const u = lista.find((x) => x.id === id);
-    if (!u || u.voz !== estado.voz) fecharPeer(id);
+    if (u?.voz === estado.voz) {
+      clearTimeout(sumidos.get(id));
+      sumidos.delete(id);
+    } else if (u || peers.get(id).pc.connectionState !== 'connected') {
+      fecharPeer(id); // saiu da sala de verdade
+    } else if (!sumidos.has(id)) {
+      // sumiu mas a conexão direta continua: espera ele reconectar no servidor
+      sumidos.set(id, setTimeout(() => {
+        sumidos.delete(id);
+        if (!estado.usuarios.some((x) => x.id === id && x.voz === estado.voz && !x.sumido)) fecharPeer(id);
+        estado.usuarios = estado.usuarios.filter((x) => !(x.id === id && x.sumido));
+        render();
+      }, ESPERA_SUMIDO));
+    }
   }
+  // quem está reconectando continua aparecendo (e sendo ouvido) na chamada
+  const reconectando = antes.filter((u) => sumidos.has(u.id) && !lista.some((x) => x.id === u.id)).map((u) => ({ ...u, sumido: true }));
+  estado.usuarios = [...lista, ...reconectando];
+  lista = estado.usuarios;
 
   // som de alguém entrando/saindo da minha sala
   const agora = new Set(estado.voz ? lista.filter((u) => u.voz === estado.voz).map((u) => u.id) : []);
-  if (estado.voz && membrosVoz.has(estado.eu.id)) {
+  if (estado.voz && membrosVoz.has(estado.eu.id) && Date.now() > silencioSonsAte) {
     if ([...agora].some((id) => !membrosVoz.has(id))) som('entrar');
     else if ([...membrosVoz].some((id) => !agora.has(id))) som('sair');
   }
@@ -1812,6 +1877,10 @@ async function entrarVoz(canal) {
   estado.vozInfo = { canal: canalPorId(canal)?.nome ?? '', servidor: estado.servidor.nome };
   estado.view = 'voz';
   socket.emit('voz:entrar', canal, (ids) => {
+    if (!Array.isArray(ids)) {
+      sairVoz(false);
+      return avisar('Não deu pra entrar nessa sala.');
+    }
     for (const id of ids) if (!peers.has(id)) criarPeer(id);
   });
   enviarEstado();
@@ -1830,6 +1899,9 @@ function sairVoz(avisarServidor = true) {
   if (estado.voz) som('sair');
   clearTimeout(pttSoltar);
   pttApertado = false;
+  clearTimeout(quedaTimer);
+  sumidos.forEach(clearTimeout);
+  sumidos.clear();
   estado.voz = null;
   estado.vozInfo = null;
   miniaturas(false);
@@ -2572,7 +2644,7 @@ $$('.cfg-abas [data-aba]').forEach((b) => (b.onclick = () => abrirAba(b.dataset.
 
 function preencherSobre() {
   $('#ver-app').textContent = VERSAO_APP ?? 'não está usando (navegador)';
-  $('#ver-servidor').textContent = estado.versao ?? '?';
+  $('#ver-servidor').textContent = estado.versaoServidor ?? '?';
   $('#cfg-versao').textContent = VERSAO_APP ? `Concord ${VERSAO_APP}` : estado.versao ? `Concord web ${estado.versao}` : '';
   const aviso = $('#ver-atualizacao');
   aviso.hidden = !atualizacaoPronta;
