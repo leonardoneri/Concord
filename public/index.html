@@ -38,6 +38,8 @@
 
   <div id="app" hidden>
     <nav id="rail">
+      <div class="rail-item" id="btn-dms" title="Mensagens diretas"><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="chat"></div></div>
+      <div class="rail-sep"></div>
       <div id="lista-servidores"></div>
       <div class="rail-sep"></div>
       <button class="rail-botao" id="btn-novo-servidor" title="Criar ou entrar num servidor">+</button>
@@ -58,6 +60,12 @@
         <ul id="canais-voz"></ul>
       </div>
 
+      <div class="lista-dms" id="lista-dms" hidden>
+        <div class="titulo-dms">Mensagens diretas</div>
+        <ul id="dms"></ul>
+        <p class="dica-dms" id="dms-vazio">Pra conversar só com uma pessoa, clique no nome dela num servidor e em <b>Mandar mensagem</b>.</p>
+      </div>
+
       <div id="painel-voz" hidden>
         <div class="linha-voz">
           <div class="info-voz">
@@ -73,7 +81,7 @@
       </div>
 
       <div class="painel-usuario">
-        <div class="eu">
+        <div class="eu" title="Mudar status">
           <span id="meu-avatar"></span>
           <div class="eu-txt">
             <span id="meu-nome"></span>
@@ -93,6 +101,7 @@
         <span id="titulo-canal"></span>
         <span id="topico"></span>
         <div class="topo-acoes">
+          <label class="busca" title="Buscar mensagens (Ctrl+F)"><input id="input-busca" placeholder="Buscar" maxlength="100" autocomplete="off"><span data-icone="buscar"></span></label>
           <button id="btn-fixadas" class="btn-icone" title="Mensagens fixadas" data-icone="pino"></button>
           <button id="btn-membros" class="btn-icone ativo" title="Lista de membros" data-icone="membros"></button>
         </div>
@@ -100,15 +109,24 @@
           <h3>Mensagens fixadas</h3>
           <div id="lista-fixadas"></div>
         </div>
+        <div id="painel-busca" class="popover" hidden>
+          <h3 id="titulo-busca">Busca</h3>
+          <div id="lista-busca"></div>
+        </div>
       </header>
 
       <div class="corpo">
         <section id="view-texto">
           <div id="mensagens"></div>
           <form id="form-msg">
+            <div id="sugestoes-mencao" hidden></div>
+            <div id="barra-resposta" hidden>
+              <span id="resposta-texto"></span>
+              <button type="button" class="btn-icone" id="btn-cancelar-resposta" title="Cancelar resposta (Esc)" data-icone="fechar"></button>
+            </div>
             <div class="caixa-msg">
-              <button type="button" class="mais" id="btn-anexar" title="Enviar imagem (ou cole com Ctrl+V)" data-icone="mais"></button>
-              <input type="file" id="input-arquivo" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+              <button type="button" class="mais" id="btn-anexar" title="Enviar arquivo, até 25 MB (ou cole com Ctrl+V / arraste aqui)" data-icone="mais"></button>
+              <input type="file" id="input-arquivo" multiple hidden>
               <input id="input-msg" maxlength="2000" autocomplete="off">
             </div>
             <div id="digitando"></div>
@@ -191,6 +209,32 @@
         </label>
       </div>
       <p class="dica-cfg">Mais qualidade e fps gastam mais internet de quem transmite. Dá pra trocar no meio da transmissão.</p>
+      <h3 class="cfg-secao">Voz e atalhos</h3>
+      <label>Supressão de ruído
+        <select id="cfg-ruido">
+          <option value="padrao">Normal</option>
+          <option value="forte">Forte (tira teclado, ventilador, barulho de fundo)</option>
+          <option value="desligado">Desligada</option>
+        </select>
+      </label>
+      <label>Modo de entrada
+        <select id="cfg-modo">
+          <option value="voz">Detecção de voz (microfone aberto)</option>
+          <option value="ptt">Apertar pra falar</option>
+        </select>
+      </label>
+      <label id="linha-ptt">Tecla do apertar pra falar
+        <button type="button" class="btn-tecla" data-atalho="ptt"></button>
+      </label>
+      <div class="linha-cfg">
+        <label>Silenciar
+          <button type="button" class="btn-tecla" data-atalho="mudo"></button>
+        </label>
+        <label>Desativar áudio
+          <button type="button" class="btn-tecla" data-atalho="surdo"></button>
+        </label>
+      </div>
+      <p class="dica-cfg">Clique no botão e aperte a tecla (vale botão lateral do mouse no apertar pra falar). Backspace limpa. No app desktop os atalhos funcionam até dentro do jogo; no navegador, só com a aba em foco.</p>
       <button type="button" class="btn-link" id="btn-sair-conta">Sair da conta</button>
     </div>
   </div>
@@ -248,6 +292,16 @@
   </div>
 
   <div id="cartao-perfil" class="popover" hidden></div>
+  <div id="seletor-emoji" class="popover" hidden></div>
+  <div id="menu-status" class="popover" hidden>
+    <input id="status-texto" maxlength="60" placeholder="Status personalizado (ex.: Jogando CS2)" autocomplete="off">
+    <button type="button" class="menu-botao" data-status="online"><span class="bolinha" data-status="online"></span>Online</button>
+    <button type="button" class="menu-botao" data-status="ausente"><span class="bolinha" data-status="ausente"></span>Ausente</button>
+    <button type="button" class="menu-botao" data-status="ocupado"><span class="bolinha" data-status="ocupado"></span><span>Não perturbe<small>Sem notificações de mensagem</small></span></button>
+    <button type="button" class="menu-botao" data-status="invisivel"><span class="bolinha" data-status="invisivel"></span><span>Invisível<small>Você aparece offline pra galera</small></span></button>
+    <hr>
+    <button type="button" class="menu-botao" id="ms-editar-perfil">Editar perfil e configurações</button>
+  </div>
   <div id="menu-pessoa" class="popover" hidden></div>
   <div id="previa-tela" hidden></div>
 

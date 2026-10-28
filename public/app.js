@@ -46,6 +46,12 @@ ICONES.pino = '<path d="M12 17v5M9 3h6l-1 7 4 3v2H6v-2l4-3z"/>';
 ICONES.cima = '<path d="m18 15-6-6-6 6"/>';
 ICONES.baixar = '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>';
 ICONES.coroa = '<path fill="currentColor" stroke="none" d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/>';
+ICONES.responder = '<path d="M9 17 4 12l5-5"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>';
+ICONES.emoji = '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>';
+ICONES.buscar = '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>';
+ICONES.arquivo = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>';
+ICONES.arroba = '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>';
+ICONES.chat = '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>';
 ICONES.micOff = ICONES.mic + CORTE;
 ICONES.foneOff = ICONES.fone + CORTE;
 
@@ -60,6 +66,11 @@ $$('[data-icone]').forEach((e) => e.prepend(icone(e.dataset.icone)));
 
 // ---------- estado ----------
 const SEM_SERVIDOR = { id: null, nome: '', icone: null, dono: null, convite: '', canais: [] };
+// as conversas diretas abrem como se fossem um "servidor" à parte
+const DM = { id: 'dm', nome: 'Mensagens diretas', icone: null, dono: null, convite: '', canais: [] };
+const PAGINA = 50; // mensagens por vez no histórico (igual ao servidor)
+const MAX_ARQUIVO = 25 * 1024 * 1024;
+const STATUS_NOME = { online: 'Online', ausente: 'Ausente', ocupado: 'Não perturbe', invisivel: 'Invisível' };
 const estado = {
   eu: null,
   servidores: [], // os servidores de que participo (barra da esquerda): { id, nome, icone, dono }
@@ -70,6 +81,10 @@ const estado = {
   iceServers: [],
   canalTexto: null, // id
   srvNaoLidos: new Set(), // servidores com mensagem nova
+  srvMencoes: new Map(), // servidor -> quantas vezes me marcaram lá
+  canalMencoes: new Set(), // canais (do servidor aberto) em que me marcaram
+  dms: [], // conversas diretas: { id, outro: { id, nome, cor, avatar, bio }, ultima }
+  dmNaoLidos: new Map(), // conversa -> mensagens novas
   view: 'texto', // 'texto' | 'voz'
   usuarios: [],
   naoLidos: new Set(),
@@ -122,8 +137,68 @@ function som(tipo) {
   });
 }
 
+// ---------- atalhos (mudo, surdo, apertar pra falar) ----------
+// modo 'voz' = microfone aberto; 'ptt' = só transmite enquanto segura a tecla
+const atalhos = { modo: 'voz', ptt: null, mudo: 'Ctrl+Shift+M', surdo: 'Ctrl+Shift+D', ...lerStorage('atalhos', {}) };
+let pttGlobal = false; // o app desktop vê a tecla mesmo com o jogo em foco
+let pttApertado = false;
+let pttSoltar = null;
+let capturando = null; // qual atalho está esperando a tecla nas configurações
+
+function apertarPtt(apertado) {
+  if (atalhos.modo !== 'ptt' || !estado.voz) return;
+  clearTimeout(pttSoltar);
+  if (apertado) {
+    if (pttApertado) return;
+    pttApertado = true;
+    aplicarMudo();
+  } else if (pttApertado) {
+    // um tiquinho de atraso pra não cortar o fim da palavra
+    pttSoltar = setTimeout(() => {
+      pttApertado = false;
+      aplicarMudo();
+    }, 200);
+  }
+}
+
+const NOMES_TECLA = {
+  Space: 'Espaço', Backquote: "' (aspas)", CapsLock: 'Caps Lock', Tab: 'Tab', ControlLeft: 'Ctrl', ControlRight: 'Ctrl direito',
+  ShiftLeft: 'Shift', ShiftRight: 'Shift direito', AltLeft: 'Alt', AltRight: 'AltGr', Mouse3: 'Botão do meio do mouse',
+  Mouse4: 'Mouse 4 (lateral)', Mouse5: 'Mouse 5 (lateral)',
+};
+const nomeTecla = (code) => NOMES_TECLA[code] ?? code.replace(/^Key|^Digit/, '').replace(/^Numpad/, 'Num ');
+const BOTOES_MOUSE = { 1: 'Mouse3', 3: 'Mouse4', 4: 'Mouse5' };
+const emCampoDeTexto = (e) => !!e.target.closest?.('input, textarea, select');
+
+// Ctrl+Shift+M etc., no formato de atalho do Electron
+function combinacao(e) {
+  const tecla = /^(Key[A-Z]|Digit\d)$/.test(e.code) ? e.code.slice(-1) : /^F\d{1,2}$/.test(e.code) ? e.code : null;
+  if (!tecla) return null;
+  return [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', tecla].filter(Boolean).join('+');
+}
+
+appDesktop?.aoAtalho?.((acao) => (acao === 'mudo' ? alternarMudo() : acao === 'surdo' ? alternarSurdo() : null));
+appDesktop?.aoPtt?.(apertarPtt);
+
+// Sem o hook do app desktop: a tecla só vale com o Concord em foco
+document.addEventListener('keydown', (e) => {
+  if (!pttGlobal && atalhos.ptt?.code === e.code && !e.repeat && !(emCampoDeTexto(e) && e.key.length === 1)) apertarPtt(true);
+  if (appDesktop || !estado.voz) return; // no app, quem cuida é o atalho global
+  const c = combinacao(e);
+  if (!c || (c !== atalhos.mudo && c !== atalhos.surdo)) return;
+  e.preventDefault();
+  c === atalhos.mudo ? alternarMudo() : alternarSurdo();
+});
+document.addEventListener('keyup', (e) => { if (!pttGlobal && atalhos.ptt?.code === e.code) apertarPtt(false); });
+document.addEventListener('mousedown', (e) => { if (!pttGlobal && atalhos.ptt && atalhos.ptt.code === BOTOES_MOUSE[e.button]) apertarPtt(true); });
+document.addEventListener('mouseup', (e) => {
+  if (pttGlobal || !atalhos.ptt || atalhos.ptt.code !== BOTOES_MOUSE[e.button]) return;
+  e.preventDefault(); // botão lateral = "voltar" no navegador
+  apertarPtt(false);
+});
+window.addEventListener('blur', () => { if (!pttGlobal) apertarPtt(false); });
+
 // ---------- desktop ----------
-appDesktop?.aoAtalho?.((acao) => (acao === 'mudo' ? alternarMudo() : alternarSurdo()));
 
 // Atualização do app já baixada: aparece o botão verde (igual o Discord); clicar reinicia atualizado
 function mostrarAtualizacao(info) {
@@ -139,10 +214,17 @@ $('#btn-atualizar').onclick = () => {
   appDesktop?.atualizar();
 };
 
-// Avisa o app desktop pra ligar/desligar os atalhos globais (Ctrl+Shift+M/D dentro do jogo)
+// Avisa o app desktop pra ligar/desligar os atalhos globais (funcionam dentro do jogo)
 function atalhosGlobais(ligar) {
-  appDesktop?.atalhos?.(ligar).then((ok) => {
-    if (ligar && ok === false) avisar('Outro programa já usa Ctrl+Shift+M ou Ctrl+Shift+D: os atalhos só vão funcionar com o app em foco.');
+  if (!appDesktop?.atalhos) return;
+  const ptt = atalhos.modo === 'ptt' ? atalhos.ptt?.code ?? null : null;
+  appDesktop.atalhos({ ligar, mudo: atalhos.mudo, surdo: atalhos.surdo, ptt }).then((res) => {
+    // a versão antiga do app responde só true/false
+    const ok = typeof res === 'object' ? res?.ok : res;
+    pttGlobal = typeof res === 'object' && !!res?.ptt;
+    if (!ligar) return;
+    if (ok === false) avisar(`Outro programa já usa ${[atalhos.mudo, atalhos.surdo].filter(Boolean).join(' ou ')}: esse atalho só vai funcionar com o app em foco.`);
+    if (ptt && !pttGlobal) avisar('Nesta versão do app, o apertar pra falar só funciona com o Concord em foco. Atualize o app pra funcionar dentro do jogo.', 8000);
   });
 }
 
@@ -286,7 +368,7 @@ function entrar() {
       return;
     }
     const primeiraVez = !estado.eu;
-    estado.eu = { id: res.id, conta: res.conta, nome: res.nome, usuario: res.usuario };
+    estado.eu = { id: res.id, conta: res.conta, nome: res.nome, usuario: res.usuario, status: res.status ?? 'online', statusTexto: res.statusTexto ?? '' };
     estado.servidores = res.servidores;
     estado.iceServers = res.iceServers;
     if (primeiraVez) aplicarPrefs(res.prefs);
@@ -300,6 +382,7 @@ function entrar() {
       return entrarComConvite(convite);
     }
     const lembrado = estado.servidor.id ?? lerStorage('servidorAtivo', null);
+    if (lembrado === 'dm') return abrirDms();
     abrirServidor(estado.servidores.some((x) => x.id === lembrado) ? lembrado : estado.servidores[0]?.id);
   });
 }
@@ -314,9 +397,10 @@ function aplicarServidor(srv) {
   if (i >= 0) estado.servidores[i] = { id: srv.id, nome: srv.nome, icone: srv.icone, dono: srv.dono };
 }
 
-// Troca o servidor aberto (id vazio = nenhum: mostra a tela de criar/entrar)
-function abrirServidor(id) {
+// Troca o servidor aberto (id vazio = nenhum: mostra a tela de criar/entrar; 'dm' = conversas diretas)
+function abrirServidor(id, canal) {
   fecharPopovers();
+  if (id === 'dm') return abrirDms(canal);
   if (id == null) {
     aplicarServidor(SEM_SERVIDOR);
     estado.perfis = [];
@@ -340,11 +424,57 @@ function abrirServidor(id) {
     estado.perfis = res.perfis;
     aplicarServidor(res.servidor);
     estado.srvNaoLidos.delete(id);
+    estado.srvMencoes.delete(id);
     salvarStorage('servidorAtivo', id);
-    const preferido = trocou ? lerStorage('ultimoCanal', {})[id] : estado.canalTexto;
+    const preferido = canal ?? (trocou ? lerStorage('ultimoCanal', {})[id] : estado.canalTexto);
     abrirTexto((estado.canaisTexto.find((c) => c.id === preferido) ?? estado.canaisTexto[0])?.id);
   });
 }
+
+// ---------- conversas diretas ----------
+const emDm = () => estado.servidor.id === 'dm';
+const dmComoCanal = (d) => d && { id: d.id, tipo: 'texto', nome: d.outro.nome, topico: '', dm: d };
+
+function aplicarDms(res) {
+  estado.dms = res.dms.filter((d) => d.outro);
+  estado.perfis = [res.eu, ...estado.dms.map((d) => d.outro)];
+}
+
+function abrirDms(canal) {
+  fecharPopovers();
+  socket.emit('dm:lista', null, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    const trocou = !emDm();
+    $('#app').classList.remove('sem-servidor');
+    $('#modal-novo-servidor').hidden = true;
+    if (trocou) estado.naoLidos.clear();
+    aplicarDms(res);
+    aplicarServidor(DM);
+    salvarStorage('servidorAtivo', 'dm');
+    const alvo = canal ?? (trocou ? lerStorage('ultimoCanal', {}).dm : estado.canalTexto);
+    abrirTexto((estado.dms.find((d) => d.id === alvo) ?? estado.dms[0])?.id);
+  });
+}
+
+// alguém começou uma conversa comigo: atualiza a lista sem trocar de conversa
+function atualizarDms() {
+  socket.emit('dm:lista', null, (res) => {
+    if (!emDm() || res?.erro) return;
+    aplicarDms(res);
+    render();
+  });
+}
+
+function abrirDmCom(conta) {
+  fecharPopovers();
+  socket.emit('dm:abrir', { conta }, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    if (emDm() && estado.dms.some((d) => d.id === res.dm.id)) return abrirTexto(res.dm.id);
+    abrirDms(res.dm.id);
+  });
+}
+
+$('#btn-dms').onclick = () => { if (!emDm()) abrirDms(); };
 
 function entrarComConvite(convite) {
   socket.emit('servidor:entrar', { convite }, (res) => {
@@ -427,6 +557,7 @@ function noServidorDoMenu(acao) {
 
 $('#btn-menu-servidor').onclick = (e) => {
   e.stopPropagation();
+  if (emDm()) return;
   if (!$('#menu-servidor').hidden) return fecharPopovers();
   const r = e.currentTarget.getBoundingClientRect();
   abrirMenuServidor(estado.servidor, { x: r.left + 8, y: r.bottom + 4, largura: Math.max(200, r.width - 16) });
@@ -443,7 +574,8 @@ $('#ms-sair').onclick = () => {
 const perfilDe = (nome) => estado.perfis.find((p) => p.nome === nome);
 const perfilPorConta = (id) => estado.perfis.find((p) => p.id === id);
 const souAdmin = () => !!perfilPorConta(estado.eu?.conta)?.admin;
-const canalPorId = (id) => estado.servidor.canais.find((c) => c.id === id);
+const souDono = () => estado.servidor.dono != null && estado.servidor.dono === estado.eu?.conta;
+const canalPorId = (id) => (emDm() ? dmComoCanal(estado.dms.find((d) => d.id === id)) : estado.servidor.canais.find((c) => c.id === id));
 
 function iniciais(nome) {
   return nome.split(/\s+/).filter(Boolean).slice(0, 3).map((p) => [...p][0]).join('').toUpperCase() || '?';
@@ -458,7 +590,7 @@ function pintarIconeServidor(e, srv = estado.servidor) {
 socket.on('servidores', (lista) => {
   estado.servidores = lista;
   // saí / apagaram o servidor aberto
-  if (estado.servidor.id != null && !lista.some((x) => x.id === estado.servidor.id)) abrirServidor(lista[0]?.id);
+  if (estado.servidor.id != null && !emDm() && !lista.some((x) => x.id === estado.servidor.id)) abrirServidor(lista[0]?.id);
   else renderRail();
 });
 
@@ -479,6 +611,7 @@ socket.on('servidor', (srv) => {
 socket.on('servidor:removido', ({ id, nome }) => {
   if (id === estado.servidor.id) avisar(`O servidor ${nome} foi apagado pelo dono.`);
 });
+socket.on('servidor:expulso', ({ nome }) => avisar(`Você foi removido(a) de ${nome} por um admin.`, 8000));
 
 socket.on('perfis', ({ servidor, perfis }) => {
   if (servidor !== estado.servidor.id) return;
@@ -592,11 +725,23 @@ function avatar(u, { status = false } = {}) {
   }
   if (u.id) a.dataset.fala = u.id;
   a.classList.toggle('falando', falando.has(u.id));
-  if (status) a.append(el('span', 'status-dot'));
+  if (status) {
+    const dot = el('span', 'status-dot');
+    dot.dataset.status = u.status ?? 'online';
+    a.append(dot);
+  }
   return a;
 }
 
+const contador = (n) => el('span', 'badge-mencao', n > 99 ? '99+' : String(n));
+
 function renderRail() {
+  const dms = $('#btn-dms');
+  const dmsNovas = [...estado.dmNaoLidos.values()].reduce((a, b) => a + b, 0);
+  dms.classList.toggle('ativo', emDm());
+  dms.classList.toggle('nao-lido', dmsNovas > 0);
+  dms.querySelector('.badge-mencao')?.remove();
+  if (dmsNovas) dms.append(contador(dmsNovas));
   $('#lista-servidores').replaceChildren(...estado.servidores.map((srv) => {
     const item = el('div', 'rail-item');
     item.classList.toggle('ativo', srv.id === estado.servidor.id);
@@ -605,6 +750,7 @@ function renderRail() {
     const ic = el('div', 'icone-servidor');
     pintarIconeServidor(ic, srv);
     item.append(el('span', 'pill'), ic);
+    if (estado.srvMencoes.get(srv.id)) item.append(contador(estado.srvMencoes.get(srv.id)));
     item.onclick = () => { if (srv.id !== estado.servidor.id) abrirServidor(srv.id); };
     item.oncontextmenu = (e) => {
       e.preventDefault();
@@ -617,18 +763,40 @@ function renderRail() {
 
 function renderServidor() {
   $('#servidor-nome').textContent = estado.servidor.nome;
+  $('#btn-menu-servidor').classList.toggle('sem-menu', emDm());
+  $$('.btn-convidar').forEach((b) => (b.hidden = emDm()));
   renderRail();
   const admin = souAdmin();
   $('#btn-cfg-servidor').hidden = !admin;
   $$('.so-admin').forEach((e) => (e.hidden = !admin));
 }
 
+function renderDms() {
+  $('#lista-dms').hidden = !emDm();
+  $('.lista-canais').hidden = emDm();
+  if (!emDm()) return;
+  $('#dms-vazio').hidden = estado.dms.length > 0;
+  $('#dms').replaceChildren(...estado.dms.map((d) => {
+    const li = el('li', 'canal dm');
+    const online = estado.usuarios.find((u) => u.conta === d.outro.id);
+    li.append(avatar(online ?? { nome: d.outro.nome, cor: d.outro.cor }, { status: !!online }), el('span', null, d.outro.nome));
+    li.classList.toggle('ativo', estado.view === 'texto' && d.id === estado.canalTexto);
+    li.classList.toggle('nao-lido', estado.dmNaoLidos.has(d.id));
+    if (estado.dmNaoLidos.get(d.id)) li.append(contador(estado.dmNaoLidos.get(d.id)));
+    li.onclick = () => abrirTexto(d.id);
+    return li;
+  }));
+}
+
 function renderCanais() {
+  renderDms();
+  if (emDm()) return;
   $('#canais-texto').replaceChildren(...estado.canaisTexto.map((c) => {
     const li = el('li', 'canal');
     li.append(icone('hash'), el('span', null, c.nome));
     li.classList.toggle('ativo', estado.view === 'texto' && c.id === estado.canalTexto);
     li.classList.toggle('nao-lido', estado.naoLidos.has(c.id));
+    if (estado.canalMencoes.has(c.id)) li.append(contador(1));
     li.onclick = () => abrirTexto(c.id);
     return li;
   }));
@@ -679,6 +847,8 @@ function itemMembro(u, online) {
   if (u.voz) {
     const sala = canalPorId(u.voz)?.nome ?? 'outro servidor';
     nome.append(el('span', 'atividade', u.tela ? `Ao vivo em ${sala}` : `Em ${sala}`));
+  } else if (online && u.statusTexto) {
+    nome.append(el('span', 'atividade', u.statusTexto));
   }
   li.append(avatar(u, { status: online }), nome);
   li.onclick = (e) => abrirPerfil(u.nome, e);
@@ -687,8 +857,9 @@ function itemMembro(u, online) {
 }
 
 function renderMembros() {
-  $('#membros').hidden = !estado.membrosVisiveis || estado.view === 'voz';
+  $('#membros').hidden = !estado.membrosVisiveis || estado.view === 'voz' || emDm();
   $('#btn-membros').classList.toggle('ativo', estado.membrosVisiveis);
+  $('#btn-membros').hidden = emDm();
   const porNome = (a, b) => a.nome.localeCompare(b.nome);
   // só membros deste servidor (a lista também traz quem está na minha call de outro servidor)
   const online = estado.usuarios.filter((u) => perfilPorConta(u.conta)).sort(porNome);
@@ -704,6 +875,7 @@ function renderMembros() {
 function renderPainel() {
   const meu = estado.usuarios.find((u) => u.id === estado.eu?.id);
   if (meu) $('#meu-avatar').replaceChildren(avatar(meu, { status: true }));
+  if (estado.eu) $('.eu-txt .status').textContent = estado.eu.statusTexto || STATUS_NOME[estado.eu.status] || 'Online';
   $('#painel-voz').hidden = !estado.voz;
   $('#nome-canal-voz').textContent = estado.vozInfo ? `${estado.vozInfo.canal} / ${estado.vozInfo.servidor}` : '';
 
@@ -725,12 +897,13 @@ function renderView() {
   const naVoz = estado.view === 'voz' && !!estado.voz;
   $('#view-texto').hidden = naVoz;
   $('#view-voz').hidden = !naVoz;
-  $('#icone-canal').replaceChildren(icone(naVoz ? 'voz' : 'hash'));
+  $('#icone-canal').replaceChildren(icone(naVoz ? 'voz' : emDm() ? 'arroba' : 'hash'));
   const texto = canalPorId(estado.canalTexto);
   $('#titulo-canal').textContent = naVoz ? estado.vozInfo?.canal ?? '' : texto?.nome ?? '';
   $('#topico').textContent = naVoz ? '' : texto?.topico ?? '';
   $('#btn-fixadas').hidden = naVoz;
-  $('#input-msg').placeholder = `Conversar em #${texto?.nome ?? ''}`;
+  $('#input-msg').placeholder = emDm() ? `Conversar com @${texto?.nome ?? ''}` : `Conversar em #${texto?.nome ?? ''}`;
+  $('#form-msg').hidden = estado.canalTexto == null;
 }
 
 $$('.categoria').forEach((c) => {
@@ -754,6 +927,10 @@ const fecharMenu = () => $('#app').classList.remove('menu-aberto');
 // ---------- chat ----------
 let mensagens = []; // mensagens do canal aberto, em ordem
 let editando = null; // { id, texto } da mensagem sendo editada
+let respondendo = null; // mensagem que estou respondendo
+let temMais = false; // ainda tem mensagem mais antiga pra carregar
+let carregandoAntigas = false;
+let alvoMensagem = null; // { canal, id }: pular pra essa mensagem quando o canal abrir
 const digitando = new Map(); // nome -> timeout
 
 function abrirTexto(canal) {
@@ -765,8 +942,13 @@ function abrirTexto(canal) {
   }
   estado.view = 'texto';
   estado.naoLidos.delete(canal);
+  estado.canalMencoes.delete(canal);
+  estado.dmNaoLidos.delete(canal);
   mensagens = [];
+  temMais = false;
   editando = null;
+  respondendo = null;
+  renderResposta();
   digitando.forEach(clearTimeout);
   digitando.clear();
   renderDigitando();
@@ -776,8 +958,10 @@ function abrirTexto(canal) {
   if (canal != null) socket.emit('historico', canal, (rows) => {
     if (canal !== estado.canalTexto || !Array.isArray(rows)) return;
     mensagens = rows;
+    temMais = rows.length >= PAGINA;
     renderMensagens();
     rolarProFim();
+    if (alvoMensagem?.canal === canal) revelar(alvoMensagem.id);
   });
   fecharMenu();
   render();
@@ -786,9 +970,134 @@ function abrirTexto(canal) {
 
 const rolarProFim = () => { const m = $('#mensagens'); m.scrollTop = m.scrollHeight; };
 
+// Rolou pro topo: busca as mensagens de antes (sem a tela pular)
+function carregarAnteriores() {
+  if (!temMais || carregandoAntigas || !mensagens.length) return Promise.resolve(false);
+  carregandoAntigas = true;
+  const canal = estado.canalTexto;
+  return new Promise((resolve) => socket.emit('historico', { canal, antes: mensagens[0].id }, (rows) => {
+    carregandoAntigas = false;
+    if (canal !== estado.canalTexto || !Array.isArray(rows)) return resolve(false);
+    temMais = rows.length >= PAGINA;
+    const box = $('#mensagens');
+    const distanciaDoFim = box.scrollHeight - box.scrollTop;
+    mensagens = [...rows, ...mensagens];
+    renderMensagens({ distanciaDoFim });
+    resolve(true);
+  }));
+}
+$('#mensagens').addEventListener('scroll', (e) => { if (e.target.scrollTop < 400) carregarAnteriores(); });
+
+// Vai até uma mensagem do canal aberto (carregando as antigas se precisar) e pisca ela
+async function revelar(id) {
+  alvoMensagem = null;
+  const canal = estado.canalTexto;
+  for (let i = 0; i < 50 && !mensagens.some((m) => m.id === id) && temMais; i++) {
+    if (!(await carregarAnteriores()) || canal !== estado.canalTexto) return;
+  }
+  const no = $(`#mensagens .msg[data-id="${id}"]`);
+  if (!no) return avisar('Essa mensagem não existe mais.', 3000);
+  no.scrollIntoView({ block: 'center' });
+  no.classList.remove('destaque');
+  void no.offsetWidth; // reinicia a animação
+  no.classList.add('destaque');
+}
+
+// Abre o servidor/conversa e o canal certos e mostra a mensagem
+function irParaMensagem(servidor, canal, id) {
+  const destino = servidor ?? 'dm';
+  alvoMensagem = { canal, id };
+  if (destino !== estado.servidor.id) return abrirServidor(destino, canal);
+  if (canal !== estado.canalTexto || estado.view !== 'texto') return abrirTexto(canal);
+  revelar(id);
+}
+
 const URL_RE = /https?:\/\/[^\s<]+/g;
 const IMG_RE = /\.(png|jpe?g|gif|webp)(\?.*)?$/i;
 const UPLOAD_RE = /^\/uploads\/[a-f0-9]+\.(png|jpg|gif|webp)$/;
+const ARQUIVO_RE = /^\/uploads\/[a-f0-9]{24}\/([^/?#]+)$/;
+const ehUpload = (texto) => texto.startsWith('/uploads/');
+const extensao = (nome) => nome.match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase() ?? '';
+const nomeDoArquivo = (texto) => {
+  try { return decodeURIComponent(texto.match(ARQUIVO_RE)?.[1] ?? ''); } catch { return 'arquivo'; }
+};
+function resumoMensagem(texto) {
+  if (UPLOAD_RE.test(texto)) return '📷 Imagem';
+  if (ARQUIVO_RE.test(texto)) return `📎 ${nomeDoArquivo(texto)}`;
+  return texto.length > 120 ? `${texto.slice(0, 120)}…` : texto;
+}
+
+function cartaoArquivo(url, nome) {
+  const c = el('div', 'arquivo');
+  const link = el('a', 'arquivo-nome', nome);
+  link.href = url;
+  link.download = nome;
+  const baixar = el('a', 'btn-icone');
+  baixar.href = url;
+  baixar.download = nome;
+  baixar.title = 'Baixar';
+  baixar.append(icone('baixar'));
+  c.append(icone('arquivo'), link, baixar);
+  return c;
+}
+
+function previewArquivo(url) {
+  const nome = nomeDoArquivo(url);
+  const ext = extensao(nome);
+  if (['mp4', 'webm', 'mov'].includes(ext)) {
+    const v = el('video', 'preview-video');
+    v.src = url;
+    v.controls = true;
+    v.preload = 'metadata';
+    const caixa = el('div', 'arquivo-midia');
+    caixa.append(v, cartaoArquivo(url, nome));
+    return caixa;
+  }
+  if (['mp3', 'ogg', 'wav', 'm4a'].includes(ext)) {
+    const a = el('audio');
+    a.src = url;
+    a.controls = true;
+    a.preload = 'metadata';
+    const caixa = el('div', 'arquivo-midia');
+    caixa.append(cartaoArquivo(url, nome), a);
+    return caixa;
+  }
+  return cartaoArquivo(url, nome);
+}
+
+// ---------- @menções ----------
+const escaparRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const FIM_NOME = '(?![\\p{L}\\p{N}_])';
+let mencaoRe = null;
+let mencaoChave = null;
+function regexMencao() {
+  // nomes maiores primeiro: "@Ana Paula" ganha de "@Ana"
+  const nomes = [...new Set(estado.perfis.map((p) => p.nome))].sort((a, b) => b.length - a.length);
+  const chave = nomes.join('\n');
+  if (chave !== mencaoChave) {
+    mencaoChave = chave;
+    mencaoRe = new RegExp(`@(?:${['todos', 'everyone', ...nomes.map(escaparRe)].join('|')})${FIM_NOME}`, 'giu');
+  }
+  return mencaoRe;
+}
+function mencionaEu(texto) {
+  const nome = estado.eu?.nome;
+  return !!nome && new RegExp(`@(?:todos|everyone|${escaparRe(nome)})${FIM_NOME}`, 'iu').test(texto);
+}
+function comMencoes(trecho) {
+  const nos = [];
+  let i = 0;
+  for (const m of trecho.matchAll(regexMencao())) {
+    nos.push(trecho.slice(i, m.index));
+    const marca = el('span', 'mencao', m[0]);
+    const p = estado.perfis.find((x) => x.nome.toLowerCase() === m[0].slice(1).toLowerCase());
+    if (p) marca.onclick = (e) => abrirPerfil(p.nome, e);
+    nos.push(marca);
+    i = m.index + m[0].length;
+  }
+  nos.push(trecho.slice(i));
+  return nos;
+}
 
 function imagemPreview(src) {
   const img = el('img', 'preview');
@@ -808,9 +1117,13 @@ function formatarTexto(texto) {
     linha.append(imagemPreview(texto));
     return linha;
   }
+  if (ARQUIVO_RE.test(texto)) {
+    linha.append(previewArquivo(texto));
+    return linha;
+  }
   let i = 0;
   for (const m of texto.matchAll(URL_RE)) {
-    linha.append(texto.slice(i, m.index));
+    linha.append(...comMencoes(texto.slice(i, m.index)));
     const a = el('a', null, m[0]);
     a.href = m[0];
     a.target = '_blank';
@@ -819,7 +1132,7 @@ function formatarTexto(texto) {
     if (IMG_RE.test(m[0])) linha.append(imagemPreview(m[0]));
     i = m.index + m[0].length;
   }
-  linha.append(texto.slice(i));
+  linha.append(...comMencoes(texto.slice(i)));
   return linha;
 }
 
@@ -847,15 +1160,20 @@ function criarMensagem(m, anterior) {
     div.append(el('span', null, data.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' })));
     nos.push(div);
   }
-  const agrupar = !novoDia && anterior.autor === m.autor && m.criado_em - anterior.criado_em < 7 * 60e3;
+  const agrupar = !novoDia && !m.resposta && anterior.autor === m.autor && m.criado_em - anterior.criado_em < 7 * 60e3;
 
   const linha = el('div', agrupar ? 'msg' : 'msg inicio');
   linha.dataset.id = m.id;
   linha.classList.toggle('fixada', !!m.fixada);
+  linha.classList.toggle('mencionado', !minhaMensagem(m) && (mencionaEu(m.texto) || m.resposta?.conta === estado.eu?.conta));
   const corpo = editando?.id === m.id ? editorMensagem(m) : corpoMensagem(m);
   if (agrupar) {
     linha.append(el('span', 'hora-lateral', fmtHora(data)), corpo);
   } else {
+    if (m.resposta) {
+      linha.classList.add('com-resposta');
+      linha.append(previaResposta(m.resposta));
+    }
     const cab = el('div', 'cabecalho');
     const autor = el('span', 'autor', m.autor);
     autor.style.color = perfilDe(m.autor)?.cor ?? m.cor;
@@ -865,10 +1183,71 @@ function criarMensagem(m, anterior) {
     av.onclick = (e) => abrirPerfil(m.autor, e);
     linha.append(av, cab, corpo);
   }
-  const acoes = acoesMensagem(m);
-  if (acoes) linha.append(acoes);
+  const reacoes = linhaReacoes(m);
+  if (reacoes) linha.append(reacoes);
+  linha.append(acoesMensagem(m));
   nos.push(linha);
   return nos;
+}
+
+// "↱ @Fulano: texto" em cima da resposta; clicar vai pra original
+function previaResposta(r) {
+  const p = el('div', 'resposta-previa');
+  if (r.apagada) {
+    p.append(el('span', 'resposta-apagada', 'A mensagem original foi apagada'));
+    return p;
+  }
+  const perfil = perfilDe(r.autor);
+  const autor = el('span', 'autor', r.autor);
+  autor.style.color = perfil?.cor ?? '';
+  p.append(avatar({ nome: r.autor, cor: perfil?.cor ?? 'var(--acento)' }), autor, el('span', 'resposta-texto', resumoMensagem(r.texto)));
+  p.onclick = () => revelar(r.id);
+  return p;
+}
+
+const EMOJIS = ['👍', '👎', '😂', '🤣', '😭', '😍', '🥰', '😎', '🤔', '😮', '😡', '🥲', '😅', '🙏', '👏', '🔥',
+  '💯', '❤️', '💀', '🎉', '👀', '✅', '❌', '🤡', '🫡', '🤝', '💪', '🎮', '🍕', '🍺', '😴', '🤯'];
+const reagir = (m, emoji) => socket.emit('msg:reagir', { id: m.id, emoji }, (res) => res?.erro && avisar(res.erro));
+
+function abrirSeletorEmoji(m, evento) {
+  evento.stopPropagation();
+  const alvo = evento.currentTarget.getBoundingClientRect();
+  const pop = $('#seletor-emoji');
+  fecharPopovers();
+  pop.replaceChildren(...EMOJIS.map((emoji) => {
+    const b = el('button', null, emoji);
+    b.type = 'button';
+    b.onclick = () => {
+      reagir(m, emoji);
+      pop.hidden = true;
+    };
+    return b;
+  }));
+  pop.hidden = false;
+  const { width, height } = pop.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(alvo.right - width, innerWidth - width - 8))}px`;
+  pop.style.top = `${alvo.top - height - 6 < 8 ? alvo.bottom + 6 : alvo.top - height - 6}px`;
+}
+
+function linhaReacoes(m) {
+  if (!m.reacoes?.length) return null;
+  const linha = el('div', 'reacoes');
+  for (const r of m.reacoes) {
+    const b = el('button', 'reacao');
+    b.type = 'button';
+    b.classList.toggle('minha', r.contas.includes(estado.eu?.conta));
+    b.append(el('span', 'reacao-emoji', r.emoji), el('span', 'reacao-n', String(r.contas.length)));
+    b.title = `${r.contas.map((c) => perfilPorConta(c)?.nome ?? 'alguém').join(', ')} reagiu com ${r.emoji}`;
+    b.onclick = () => reagir(m, r.emoji);
+    linha.append(b);
+  }
+  const mais = el('button', 'reacao reacao-add');
+  mais.type = 'button';
+  mais.title = 'Adicionar reação';
+  mais.append(icone('emoji'));
+  mais.onclick = (e) => abrirSeletorEmoji(m, e);
+  linha.append(mais);
+  return linha;
 }
 
 function corpoMensagem(m) {
@@ -891,27 +1270,43 @@ function acoesMensagem(m) {
     b.onclick = acao;
     botoes.push(b);
   };
-  if (minha && !UPLOAD_RE.test(m.texto)) botao('lapis', 'Editar', () => iniciarEdicao(m));
-  if (souAdmin()) botao('pino', m.fixada ? 'Desafixar' : 'Fixar', () => fixarMensagem(m, !m.fixada));
+  botao('emoji', 'Reagir', (e) => abrirSeletorEmoji(m, e));
+  botao('responder', 'Responder', () => responder(m));
+  if (minha && !ehUpload(m.texto)) botao('lapis', 'Editar', () => iniciarEdicao(m));
+  if (souAdmin() || emDm()) botao('pino', m.fixada ? 'Desafixar' : 'Fixar', () => fixarMensagem(m, !m.fixada));
   if (minha || souAdmin()) botao('lixo', 'Apagar (Shift+clique apaga sem perguntar)', (e) => apagarMensagem(m, e));
-  if (!botoes.length) return null;
   const caixa = el('div', 'acoes-msg');
   caixa.append(...botoes);
   return caixa;
 }
 
-function renderMensagens() {
+// distanciaDoFim: mantém a tela parada quando entram mensagens antigas em cima
+function renderMensagens({ distanciaDoFim } = {}) {
   const box = $('#mensagens');
   const noFim = pertoDoFim(box);
   const topo = box.scrollTop;
   const canal = canalPorId(estado.canalTexto)?.nome;
-  if (canal == null) return box.replaceChildren();
-  const boas = el('div', 'boas-vindas');
-  const bola = el('div', 'bola');
-  bola.append(icone('hash'));
-  boas.append(bola, el('h2', null, `Bem-vindo(a) a #${canal}!`), el('p', null, `Este é o começo do canal #${canal}.`));
-  box.replaceChildren(boas, ...mensagens.flatMap((m, i) => criarMensagem(m, mensagens[i - 1])));
-  if (noFim) rolarProFim();
+  if (canal == null) {
+    if (emDm()) {
+      const vazio = el('div', 'boas-vindas');
+      vazio.append(el('h2', null, 'Nenhuma conversa ainda'), el('p', null, 'Clique no nome de alguém do servidor e em "Mandar mensagem".'));
+      return box.replaceChildren(vazio);
+    }
+    return box.replaceChildren();
+  }
+  let inicio;
+  if (temMais) {
+    inicio = el('div', 'carregando-mais', 'Carregando mensagens antigas…');
+  } else {
+    inicio = el('div', 'boas-vindas');
+    const bola = el('div', 'bola');
+    bola.append(icone(emDm() ? 'arroba' : 'hash'));
+    if (emDm()) inicio.append(bola, el('h2', null, canal), el('p', null, `Este é o começo da sua conversa com ${canal}.`));
+    else inicio.append(bola, el('h2', null, `Bem-vindo(a) a #${canal}!`), el('p', null, `Este é o começo do canal #${canal}.`));
+  }
+  box.replaceChildren(inicio, ...mensagens.flatMap((m, i) => criarMensagem(m, mensagens[i - 1])));
+  if (distanciaDoFim != null) box.scrollTop = box.scrollHeight - distanciaDoFim;
+  else if (noFim) rolarProFim();
   else box.scrollTop = topo;
   box.querySelector('.editar-msg')?.focus();
 }
@@ -997,6 +1392,16 @@ socket.on('msg:apagada', ({ id, canal }) => {
 });
 
 // ---------- mensagens fixadas ----------
+function mensagemCompacta(m) {
+  const item = el('div', 'fixada-item');
+  const cab = el('div', 'cabecalho');
+  const autor = el('span', 'autor', m.autor);
+  autor.style.color = perfilDe(m.autor)?.cor ?? m.cor;
+  cab.append(avatar({ nome: m.autor, cor: m.cor }), autor, el('span', 'hora', fmtCabecalho(new Date(m.criado_em))));
+  item.append(cab, formatarTexto(m.texto));
+  return item;
+}
+
 function carregarFixadas() {
   const canal = estado.canalTexto;
   socket.emit('fixadas', canal, (lista) => {
@@ -1007,13 +1412,8 @@ function carregarFixadas() {
       return;
     }
     box.replaceChildren(...lista.map((m) => {
-      const item = el('div', 'fixada-item');
-      const cab = el('div', 'cabecalho');
-      const autor = el('span', 'autor', m.autor);
-      autor.style.color = perfilDe(m.autor)?.cor ?? m.cor;
-      cab.append(avatar({ nome: m.autor, cor: m.cor }), autor, el('span', 'hora', fmtCabecalho(new Date(m.criado_em))));
-      item.append(cab, formatarTexto(m.texto));
-      if (souAdmin()) {
+      const item = mensagemCompacta(m);
+      if (souAdmin() || emDm()) {
         const b = el('button', 'btn-link', 'Desafixar');
         b.onclick = () => fixarMensagem(m, false);
         item.append(b);
@@ -1033,6 +1433,60 @@ $('#btn-fixadas').onclick = (e) => {
   }
 };
 
+// ---------- busca ----------
+function buscar(termo) {
+  fecharPopovers();
+  $('#painel-busca').hidden = false;
+  $('#titulo-busca').textContent = 'Buscando…';
+  $('#lista-busca').replaceChildren();
+  socket.emit('buscar', { termo }, (res) => {
+    if (res?.erro) {
+      $('#titulo-busca').textContent = 'Busca';
+      return $('#lista-busca').replaceChildren(el('p', 'vazio', res.erro));
+    }
+    const n = res.resultados.length;
+    $('#titulo-busca').textContent = n ? `${n >= 25 ? 'Os 25 mais recentes' : n === 1 ? '1 resultado' : `${n} resultados`} pra "${termo}"` : `Nada encontrado pra "${termo}"`;
+    $('#lista-busca').replaceChildren(...res.resultados.map((m) => {
+      const item = mensagemCompacta(m);
+      const canal = canalPorId(m.canal)?.nome ?? '';
+      item.prepend(el('div', 'busca-onde', m.servidor === null ? `@${canal}` : `#${canal}`));
+      item.classList.add('clicavel');
+      item.title = 'Ir pra mensagem';
+      item.onclick = () => {
+        fecharPopovers();
+        irParaMensagem(m.servidor, m.canal, m.id);
+      };
+      return item;
+    }));
+  });
+}
+$('#input-busca').onkeydown = (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const termo = e.target.value.trim();
+    if (termo) buscar(termo);
+  } else if (e.key === 'Escape') {
+    e.target.value = '';
+    e.target.blur();
+  }
+};
+
+// ---------- mensagem nova, notificação ----------
+function notificar(m, mencao) {
+  if (m.conta === estado.eu.conta || estado.eu.status === 'ocupado') return;
+  const vendo = document.hasFocus() && m.canal === estado.canalTexto && estado.view === 'texto';
+  // com o app em foco, só avisa quando me marcam ou é mensagem direta
+  if (vendo || (document.hasFocus() && !mencao) || window.Notification?.permission !== 'granted') return;
+  const onde = m.servidor === null
+    ? 'mensagem direta'
+    : m.servidor === estado.servidor.id ? `#${canalPorId(m.canal)?.nome}` : estado.servidores.find((x) => x.id === m.servidor)?.nome;
+  const n = new Notification(`${m.autor} (${onde})`, { body: resumoMensagem(m.texto) });
+  n.onclick = () => {
+    window.focus();
+    irParaMensagem(m.servidor, m.canal, m.id);
+  };
+}
+
 socket.on('mensagem', (m) => {
   if (digitando.has(m.autor)) {
     clearTimeout(digitando.get(m.autor));
@@ -1040,63 +1494,164 @@ socket.on('mensagem', (m) => {
     renderDigitando();
   }
   const minha = m.conta === estado.eu.conta;
-  if (m.servidor !== estado.servidor.id) {
-    // mensagem em outro servidor meu: marca a bolinha na barra da esquerda
-    if (!minha) {
-      estado.srvNaoLidos.add(m.servidor);
-      renderRail();
-    }
-  } else {
-    if (m.canal === estado.canalTexto) adicionarMensagem(m);
-    if (m.canal !== estado.canalTexto || estado.view !== 'texto') {
-      estado.naoLidos.add(m.canal);
+  const dm = m.servidor === null;
+  const mencao = !minha && (dm || mencionaEu(m.texto) || m.resposta?.conta === estado.eu.conta);
+  const aberto = dm ? emDm() : m.servidor === estado.servidor.id;
+  if (dm && emDm()) {
+    const d = estado.dms.find((x) => x.id === m.canal);
+    if (d) {
+      d.ultima = m.criado_em;
+      estado.dms.sort((a, b) => (b.ultima ?? 0) - (a.ultima ?? 0));
       renderCanais();
+    } else {
+      atualizarDms(); // conversa nova
     }
   }
-  if (!minha && !document.hasFocus() && window.Notification?.permission === 'granted') {
-    const srv = estado.servidores.find((x) => x.id === m.servidor)?.nome;
-    const canal = m.servidor === estado.servidor.id ? `#${canalPorId(m.canal)?.nome}` : srv;
-    new Notification(`${m.autor} (${canal})`, { body: UPLOAD_RE.test(m.texto) ? '📷 Imagem' : m.texto, silent: false });
+  const vendo = aberto && m.canal === estado.canalTexto;
+  if (vendo) adicionarMensagem(m);
+  if (!minha && !(vendo && estado.view === 'texto')) {
+    if (dm) {
+      estado.dmNaoLidos.set(m.canal, (estado.dmNaoLidos.get(m.canal) ?? 0) + 1);
+    } else if (aberto) {
+      estado.naoLidos.add(m.canal);
+      if (mencao) estado.canalMencoes.add(m.canal);
+    } else {
+      // mensagem em outro servidor meu: marca a bolinha na barra da esquerda
+      estado.srvNaoLidos.add(m.servidor);
+      if (mencao) estado.srvMencoes.set(m.servidor, (estado.srvMencoes.get(m.servidor) ?? 0) + 1);
+    }
+    renderCanais();
+    renderRail();
   }
+  notificar(m, mencao);
 });
+
+// ---------- responder ----------
+function responder(m) {
+  respondendo = m;
+  renderResposta();
+  $('#input-msg').focus();
+}
+function renderResposta() {
+  $('#barra-resposta').hidden = !respondendo;
+  if (respondendo) $('#resposta-texto').replaceChildren('Respondendo a ', el('b', null, respondendo.autor));
+}
+$('#btn-cancelar-resposta').onclick = () => {
+  respondendo = null;
+  renderResposta();
+};
 
 $('#form-msg').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = $('#input-msg');
   const texto = input.value.trim();
   if (!texto) return;
-  socket.emit('mensagem', { canal: estado.canalTexto, texto });
+  socket.emit('mensagem', { canal: estado.canalTexto, texto, resposta: respondendo?.id ?? null });
   input.value = '';
+  respondendo = null;
+  renderResposta();
 });
 
-async function enviarImagem(arquivo) {
-  if (!arquivo?.type.startsWith('image/')) return;
-  if (arquivo.size > 10 * 1024 * 1024) return avisar('Imagem grande demais (máx. 10 MB).');
+// ---------- arquivos (imagem, vídeo, zip…) ----------
+async function enviarArquivo(arquivo) {
+  if (!arquivo) return;
+  if (arquivo.size > MAX_ARQUIVO) return avisar(`${arquivo.name || 'Esse arquivo'} é grande demais (máx. 25 MB).`);
   const canal = estado.canalTexto;
-  avisar('Enviando imagem…', 60000);
+  const resposta = respondendo?.id ?? null;
+  respondendo = null;
+  renderResposta();
+  avisar(`Enviando ${arquivo.name || 'arquivo'}…`, 120000);
   const dados = await arquivo.arrayBuffer();
-  socket.timeout(60000).emit('imagem', { canal, dados }, (err, res) => {
-    if (err) return avisar('Não deu pra enviar a imagem (conexão lenta?).');
+  socket.timeout(120000).emit('arquivo', { canal, nome: arquivo.name, dados, resposta }, (err, res) => {
+    if (err) return avisar('Não deu pra enviar o arquivo (conexão lenta?).');
     if (res?.erro) return avisar(res.erro);
     $('#toast').hidden = true;
   });
 }
 
 $('#input-msg').addEventListener('paste', (e) => {
-  const arquivo = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'));
-  if (!arquivo) return;
+  const arquivos = [...e.clipboardData.files];
+  if (!arquivos.length) return;
   e.preventDefault();
-  enviarImagem(arquivo);
+  arquivos.forEach(enviarArquivo);
 });
 $('#btn-anexar').onclick = () => $('#input-arquivo').click();
 $('#input-arquivo').onchange = (e) => {
-  [...e.target.files].forEach(enviarImagem);
+  [...e.target.files].forEach(enviarArquivo);
   e.target.value = '';
 };
 $('#view-texto').addEventListener('dragover', (e) => e.preventDefault());
 $('#view-texto').addEventListener('drop', (e) => {
   e.preventDefault();
-  [...e.dataTransfer.files].forEach(enviarImagem);
+  [...e.dataTransfer.files].forEach(enviarArquivo);
+});
+
+// ---------- sugestões de @menção ----------
+let sugestoes = [];
+let sugestaoAtiva = 0;
+function atualizarSugestoes() {
+  const input = $('#input-msg');
+  const caixa = $('#sugestoes-mencao');
+  const m = input.value.slice(0, input.selectionStart).match(/(?:^|\s)@([^\s@]*)$/u);
+  sugestoes = [];
+  if (m) {
+    const busca = m[1].toLowerCase();
+    const pessoas = estado.perfis.filter((p) => p.id !== estado.eu?.conta).map((p) => ({ nome: p.nome, perfil: p }));
+    if (!emDm()) pessoas.push({ nome: 'todos', dica: 'avisa todo mundo do servidor' });
+    sugestoes = pessoas.filter((x) => x.nome.toLowerCase().includes(busca))
+      .sort((a, b) => b.nome.toLowerCase().startsWith(busca) - a.nome.toLowerCase().startsWith(busca))
+      .slice(0, 8);
+  }
+  caixa.hidden = !sugestoes.length;
+  if (!sugestoes.length) return;
+  sugestaoAtiva = Math.min(sugestaoAtiva, sugestoes.length - 1);
+  caixa.replaceChildren(el('div', 'sugestoes-titulo', 'Membros'), ...sugestoes.map((x, i) => {
+    const item = el('div', 'sugestao');
+    item.classList.toggle('ativa', i === sugestaoAtiva);
+    item.append(x.perfil ? avatar(x.perfil) : el('span', 'avatar avatar-arroba', '@'), el('span', null, x.nome));
+    if (x.dica) item.append(el('small', null, x.dica));
+    item.onmousedown = (e) => {
+      e.preventDefault(); // não tira o foco do campo
+      escolherSugestao(i);
+    };
+    return item;
+  }));
+}
+function escolherSugestao(i) {
+  const x = sugestoes[i];
+  if (!x) return;
+  const input = $('#input-msg');
+  const pos = input.selectionStart;
+  const antes = input.value.slice(0, pos).replace(/@([^\s@]*)$/u, `@${x.nome} `);
+  input.value = antes + input.value.slice(pos);
+  input.setSelectionRange(antes.length, antes.length);
+  sugestoes = [];
+  $('#sugestoes-mencao').hidden = true;
+}
+$('#input-msg').addEventListener('input', () => {
+  sugestaoAtiva = 0;
+  atualizarSugestoes();
+});
+$('#input-msg').addEventListener('blur', () => setTimeout(() => ($('#sugestoes-mencao').hidden = true), 100));
+$('#input-msg').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && respondendo && $('#sugestoes-mencao').hidden) {
+    e.stopPropagation();
+    respondendo = null;
+    return renderResposta();
+  }
+  if (!sugestoes.length || $('#sugestoes-mencao').hidden) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    sugestaoAtiva = (sugestaoAtiva + (e.key === 'ArrowDown' ? 1 : -1) + sugestoes.length) % sugestoes.length;
+    atualizarSugestoes();
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    e.preventDefault();
+    escolherSugestao(sugestaoAtiva);
+  } else if (e.key === 'Escape') {
+    e.stopPropagation();
+    sugestoes = [];
+    $('#sugestoes-mencao').hidden = true;
+  }
 });
 
 let ultimoAvisoDigitando = 0;
@@ -1169,10 +1724,49 @@ setInterval(() => {
 // ---------- voz / vídeo (WebRTC) ----------
 const preferido = (id) => (id ? { deviceId: { ideal: id } } : {});
 
+// supressão de ruído: 'padrao' (a do navegador), 'forte' (RNNoise: tira teclado, ventilador) ou 'desligado'
 async function pegarMic() {
-  return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...preferido(dispositivos.mic) },
+  const ruido = dispositivos.ruido ?? 'padrao';
+  const bruto = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: ruido === 'padrao', autoGainControl: true, ...preferido(dispositivos.mic) },
   });
+  if (ruido !== 'forte') return bruto;
+  try {
+    return await suprimirRuido(bruto);
+  } catch (e) {
+    console.error('Supressão de ruído', e);
+    avisar('A supressão de ruído forte não funcionou aqui: usando a normal.');
+    return bruto;
+  }
+}
+
+let ruidoCtx = null;
+let ruidoLib = null;
+let ruidoWasm = null;
+async function suprimirRuido(bruto) {
+  ruidoLib ??= await import('/vendor/ruido/index.js');
+  if (!ruidoCtx) {
+    const ctx = new AudioContext({ sampleRate: 48000 }); // o RNNoise trabalha em 48 kHz
+    await ctx.audioWorklet.addModule('/vendor/ruido/rnnoise/workletProcessor.js');
+    ruidoWasm = await ruidoLib.loadRnnoise({ url: '/vendor/ruido/rnnoise.wasm', simdUrl: '/vendor/ruido/rnnoise_simd.wasm' });
+    ruidoCtx = ctx;
+  }
+  await ruidoCtx.resume();
+  const src = ruidoCtx.createMediaStreamSource(bruto);
+  const filtro = new ruidoLib.RnnoiseWorkletNode(ruidoCtx, { maxChannels: 1, wasmBinary: ruidoWasm });
+  const saida = ruidoCtx.createMediaStreamDestination();
+  src.connect(filtro).connect(saida);
+  const [track] = saida.stream.getAudioTracks();
+  // parar a trilha limpa desliga o microfone de verdade
+  const parar = track.stop.bind(track);
+  track.stop = () => {
+    parar();
+    bruto.getTracks().forEach((t) => t.stop());
+    src.disconnect();
+    filtro.disconnect();
+    filtro.destroy();
+  };
+  return new MediaStream([track]);
 }
 
 async function entrarVoz(canal) {
@@ -1220,6 +1814,8 @@ function sairVoz(avisarServidor = true) {
   }
   if (estado.eu) pararMonitor(estado.eu.id);
   if (estado.voz) som('sair');
+  clearTimeout(pttSoltar);
+  pttApertado = false;
   estado.voz = null;
   estado.vozInfo = null;
   miniaturas(false);
@@ -1241,7 +1837,8 @@ function enviarEstado() {
 }
 
 function aplicarMudo() {
-  estado.mic?.getAudioTracks().forEach((t) => (t.enabled = !estado.mudo && !estado.surdo));
+  const aberto = !estado.mudo && !estado.surdo && (atalhos.modo !== 'ptt' || pttApertado);
+  estado.mic?.getAudioTracks().forEach((t) => (t.enabled = aberto));
 }
 
 // Bitrate máximo por pessoa assistindo, de acordo com a qualidade escolhida
@@ -1928,8 +2525,107 @@ async function abrirConfig() {
   preencher('#cfg-cam', 'videoinput', 'cam');
   $('#cfg-resolucao').value = qualidadeTela() === QUALIDADES[transmissao.resolucao] ? transmissao.resolucao : '1080';
   $('#cfg-fps').value = String(fpsTela());
-
+  $('#cfg-ruido').value = dispositivos.ruido ?? 'padrao';
+  capturando = null;
+  renderAtalhos();
 }
+
+// ---------- atalhos nas configurações ----------
+function renderAtalhos() {
+  $('#cfg-modo').value = atalhos.modo;
+  $('#linha-ptt').hidden = atalhos.modo !== 'ptt';
+  $$('[data-atalho]').forEach((b) => {
+    const chave = b.dataset.atalho;
+    const valor = chave === 'ptt' ? atalhos.ptt && nomeTecla(atalhos.ptt.code) : atalhos[chave];
+    b.textContent = capturando === chave ? 'Aperte a tecla… (Esc cancela)' : valor || 'Nenhum';
+    b.classList.toggle('capturando', capturando === chave);
+  });
+}
+function salvarAtalhos() {
+  capturando = null;
+  salvarStorage('atalhos', atalhos);
+  renderAtalhos();
+  aplicarMudo();
+  if (estado.voz) atalhosGlobais(true);
+}
+$('#cfg-modo').onchange = (e) => {
+  atalhos.modo = e.target.value;
+  if (atalhos.modo === 'ptt' && !atalhos.ptt) capturando = 'ptt';
+  salvarStorage('atalhos', atalhos);
+  renderAtalhos();
+  aplicarMudo();
+  if (estado.voz) atalhosGlobais(true);
+};
+$$('[data-atalho]').forEach((b) => (b.onclick = (e) => {
+  e.preventDefault();
+  capturando = capturando === b.dataset.atalho ? null : b.dataset.atalho;
+  renderAtalhos();
+}));
+// pega a tecla antes de qualquer outro atalho da página
+window.addEventListener('keydown', (e) => {
+  if (!capturando) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (e.key === 'Escape') {
+    capturando = null;
+    return renderAtalhos();
+  }
+  const apagar = e.key === 'Backspace' || e.key === 'Delete';
+  if (capturando === 'ptt') {
+    atalhos.ptt = apagar ? null : { code: e.code };
+  } else if (apagar) {
+    atalhos[capturando] = '';
+  } else {
+    const c = combinacao(e);
+    if (!c) return; // só modificador por enquanto: espera a tecla
+    if (!c.includes('+') && !/^F\d/.test(c)) return avisar('Use junto com Ctrl, Alt ou Shift (ou uma tecla F1–F12).', 3000);
+    atalhos[capturando] = c;
+  }
+  salvarAtalhos();
+}, true);
+window.addEventListener('mousedown', (e) => {
+  if (capturando !== 'ptt' || !BOTOES_MOUSE[e.button]) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  atalhos.ptt = { code: BOTOES_MOUSE[e.button] };
+  salvarAtalhos();
+}, true);
+
+// ---------- status (clicar no seu nome, embaixo à esquerda) ----------
+function mudarStatus(status, texto = estado.eu.statusTexto) {
+  socket.emit('status', { status, texto }, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    estado.eu.status = status;
+    estado.eu.statusTexto = String(texto ?? '').trim().slice(0, 60);
+    renderPainel();
+  });
+}
+function abrirMenuStatus(e) {
+  e.stopPropagation();
+  const menu = $('#menu-status');
+  if (!menu.hidden) return fecharPopovers();
+  fecharPopovers();
+  $('#status-texto').value = estado.eu.statusTexto ?? '';
+  $$('#menu-status [data-status]').forEach((b) => b.classList.toggle('ativo', b.dataset.status === estado.eu.status));
+  menu.hidden = false;
+  const r = $('.painel-usuario').getBoundingClientRect();
+  menu.style.left = `${r.left + 8}px`;
+  menu.style.top = `${Math.max(8, r.top - menu.getBoundingClientRect().height - 8)}px`;
+  $('#status-texto').focus();
+}
+$$('#menu-status [data-status]').forEach((b) => (b.onclick = () => {
+  mudarStatus(b.dataset.status, $('#status-texto').value);
+  fecharPopovers();
+}));
+$('#status-texto').onkeydown = (e) => {
+  if (e.key !== 'Enter') return;
+  mudarStatus(estado.eu.status, e.target.value);
+  fecharPopovers();
+};
+$('#ms-editar-perfil').onclick = () => {
+  fecharPopovers();
+  abrirConfig();
+};
 
 // ---------- perfil (foto, cor, sobre mim) ----------
 let corAutomatica = true;
@@ -2012,8 +2708,12 @@ function abrirPerfil(nome, evento) {
   if (p?.admin) titulo.append(icone('coroa', 'coroa'));
   corpo.append(titulo);
   if (p?.dono) corpo.append(el('p', 'perfil-status', `Dono de ${estado.servidor.nome}`));
-  const status = online ? (online.voz ? `Em ${online.voz}${online.tela ? ' · ao vivo' : ''}` : 'Online') : 'Offline';
+  const sala = online?.voz ? canalPorId(online.voz)?.nome ?? 'uma call' : null;
+  const status = online
+    ? sala ? `Em ${sala}${online.tela ? ' · ao vivo' : ''}` : STATUS_NOME[online.status] ?? 'Online'
+    : 'Offline';
   corpo.append(el('p', 'perfil-status', status));
+  if (online?.statusTexto) corpo.append(el('p', 'perfil-status-texto', online.statusTexto));
   if (p?.bio) {
     corpo.append(el('h4', null, 'Sobre mim'), el('p', 'perfil-bio', p.bio));
   }
@@ -2023,13 +2723,31 @@ function abrirPerfil(nome, evento) {
     const b = el('button', 'btn-secundario', 'Editar perfil');
     b.onclick = () => { fecharPopovers(); abrirConfig(); };
     acoes.append(b);
-  } else if (p && souAdmin() && !p.dono) {
-    const b = el('button', 'btn-secundario', p.admin ? 'Remover admin' : 'Tornar admin');
-    b.onclick = () => socket.emit('admin:definir', { conta: p.id, admin: !p.admin }, (res) => {
-      if (res?.erro) return avisar(res.erro);
-      fecharPopovers();
-    });
-    acoes.append(b);
+  } else if (p) {
+    const msg = el('button', 'btn-primario', 'Mandar mensagem');
+    msg.onclick = () => abrirDmCom(p.id);
+    acoes.append(msg);
+    if (souAdmin() && !p.dono) {
+      const b = el('button', 'btn-secundario', p.admin ? 'Remover admin' : 'Tornar admin');
+      b.onclick = () => socket.emit('admin:definir', { conta: p.id, admin: !p.admin }, (res) => {
+        if (res?.erro) return avisar(res.erro);
+        fecharPopovers();
+      });
+      acoes.append(b);
+    }
+    // admin expulsa membro comum; só o dono expulsa admin
+    if (souAdmin() && !p.dono && (!p.admin || souDono())) {
+      const b = el('button', 'btn-perigo', 'Expulsar');
+      b.onclick = () => {
+        if (!confirm(`Expulsar ${p.nome} de ${estado.servidor.nome}? A pessoa só volta com um convite.`)) return;
+        socket.emit('membro:expulsar', { conta: p.id }, (res) => {
+          if (res?.erro) return avisar(res.erro);
+          fecharPopovers();
+          avisar(`${p.nome} foi expulso(a) do servidor.`, 3000);
+        });
+      };
+      acoes.append(b);
+    }
   }
   if (acoes.childElementCount) corpo.append(acoes);
 
@@ -2203,17 +2921,24 @@ $('#btn-sair-conta').onclick = () => {
   socket.emit('conta:sair', t);
   setTimeout(() => location.reload(), 200);
 };
-$('.eu').onclick = abrirConfig;
+$('.eu').onclick = abrirMenuStatus;
 
 function salvarDispositivo(chave, valor) {
   dispositivos[chave] = valor;
   salvarStorage('dispositivos', dispositivos);
 }
 
-$('#cfg-mic').onchange = async (e) => {
+$('#cfg-mic').onchange = (e) => {
   salvarDispositivo('mic', e.target.value);
+  trocarMic();
+};
+$('#cfg-ruido').onchange = (e) => {
+  salvarDispositivo('ruido', e.target.value);
+  trocarMic();
+};
+// troca o microfone no meio da chamada sem mudar o id do stream
+async function trocarMic() {
   if (!estado.mic) return;
-  // troca o microfone no meio da chamada sem mudar o id do stream
   try {
     const novo = (await pegarMic()).getAudioTracks()[0];
     const [antigo] = estado.mic.getAudioTracks();
@@ -2227,7 +2952,7 @@ $('#cfg-mic').onchange = async (e) => {
   } catch (err) {
     avisar(`Não consegui trocar o microfone: ${err.message}`);
   }
-};
+}
 $('#cfg-saida').onchange = (e) => {
   salvarDispositivo('saida', e.target.value);
   $$('#audios audio').forEach((m) => m.setSinkId?.(e.target.value).catch(() => {}));
@@ -2266,4 +2991,12 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   $$('.modal').forEach((m) => (m.hidden = true));
   fecharPopovers();
+});
+// atalho de busca, igual o Discord
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && !$('#app').hidden) {
+    e.preventDefault();
+    $('#input-busca').focus();
+    $('#input-busca').select();
+  }
 });

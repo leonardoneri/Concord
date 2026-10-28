@@ -975,3 +975,246 @@ textarea {
 #btn-atualizar { margin-top: auto; background: var(--verde); color: #fff; animation: pulsar 2s ease-in-out infinite; }
 #btn-atualizar:hover { border-radius: 16px; background: var(--verde); filter: brightness(1.1); animation: none; }
 @keyframes pulsar { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--verde) 25%, transparent); } }
+
+/* ---------- respostas, reações, menções ---------- */
+.msg .acoes-msg { z-index: 2; }
+.resposta-previa {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--texto-2);
+  cursor: pointer;
+  position: relative;
+  margin-bottom: 2px;
+}
+.resposta-previa::before {
+  content: "";
+  position: absolute;
+  left: -38px;
+  top: 9px;
+  width: 30px;
+  height: 10px;
+  border: 2px solid #4e5058;
+  border-width: 2px 0 0 2px;
+  border-top-left-radius: 6px;
+}
+.resposta-previa .avatar { position: static; width: 16px; height: 16px; font-size: 9px; flex: none; }
+.resposta-previa .autor { font-weight: 500; white-space: nowrap; }
+.resposta-texto { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resposta-previa:hover .resposta-texto { color: var(--forte); }
+.resposta-apagada { font-style: italic; }
+.msg.com-resposta > .avatar { top: 26px; }
+.msg.mencionado { background: #f0b2321a; box-shadow: inset 2px 0 0 #f0b232; }
+.msg.mencionado:hover { background: #f0b23226; }
+.msg.destaque { animation: destaque 2s ease-out; }
+@keyframes destaque { from { background: #5865f24d; } to { background: transparent; } }
+.mencao {
+  background: #5865f24d;
+  color: #c9cdfb;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.mencao:hover { background: var(--acento); color: #fff; }
+
+.reacoes { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+.reacao {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: #2b2d31;
+  border: 1px solid transparent;
+  color: var(--texto-2);
+  font-size: 14px;
+  cursor: pointer;
+}
+.reacao:hover { border-color: #4e5058; }
+.reacao.minha { background: #5865f226; border-color: var(--acento); color: #c9cdfb; }
+.reacao-emoji { font-size: 16px; line-height: 1; }
+.reacao-n { font-weight: 600; font-variant-numeric: tabular-nums; }
+.reacao-add { opacity: 0; padding: 0 6px; }
+.reacao-add .ic { width: 16px; height: 16px; }
+.msg:hover .reacao-add { opacity: 1; }
+#seletor-emoji {
+  position: fixed;
+  display: grid;
+  grid-template-columns: repeat(8, 36px);
+  gap: 2px;
+  padding: 8px;
+}
+#seletor-emoji button { width: 36px; height: 36px; border-radius: 6px; font-size: 22px; line-height: 1; cursor: pointer; }
+#seletor-emoji button:hover { background: var(--hover); }
+
+#form-msg { position: relative; }
+#barra-resposta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #2b2d31;
+  border-radius: 8px 8px 0 0;
+  padding: 4px 8px 4px 16px;
+  font-size: 13px;
+  color: var(--texto-2);
+}
+#barra-resposta b { color: var(--forte); }
+#barra-resposta .btn-icone { width: 24px; height: 24px; }
+#barra-resposta:not([hidden]) + .caixa-msg { border-radius: 0 0 8px 8px; }
+#sugestoes-mencao {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(100% + 4px);
+  background: #2b2d31;
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 8px 24px #0008;
+  z-index: 5;
+}
+.sugestoes-titulo { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--texto-2); padding: 0 8px 6px; }
+.sugestao { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+.sugestao.ativa, .sugestao:hover { background: var(--ativo); }
+.sugestao .avatar { width: 24px; height: 24px; font-size: 11px; }
+.sugestao small { margin-left: auto; color: var(--texto-2); font-size: 12px; }
+.avatar-arroba { background: var(--acento); }
+.carregando-mais { padding: 16px; text-align: center; font-size: 13px; color: var(--texto-2); }
+
+/* ---------- arquivos ---------- */
+.arquivo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, 100%);
+  margin: 4px 0;
+  padding: 10px 12px;
+  background: #2b2d31;
+  border: 1px solid #1f2023;
+  border-radius: 8px;
+  white-space: normal;
+}
+.arquivo > .ic { width: 30px; height: 30px; flex: none; color: #b5bac1; }
+.arquivo-nome { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arquivo .btn-icone { flex: none; color: var(--texto-2); }
+.arquivo .btn-icone:hover { color: var(--forte); }
+.arquivo-midia { display: grid; gap: 4px; max-width: min(480px, 100%); }
+.arquivo-midia .arquivo { margin: 0; }
+.preview-video { width: 100%; max-height: 320px; border-radius: 8px; background: #000; margin-top: 4px; }
+.arquivo-midia audio { width: 100%; }
+
+/* ---------- busca ---------- */
+.busca {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 160px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #1e1f22;
+  text-transform: none;
+  transition: width .15s;
+  cursor: text;
+}
+.busca:focus-within { width: 240px; }
+.busca input { background: none; padding: 0; font-size: 14px; min-width: 0; }
+.busca .ic { width: 16px; height: 16px; flex: none; color: var(--texto-2); }
+#painel-busca {
+  top: 44px;
+  right: 8px;
+  width: min(440px, calc(100vw - 32px));
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 0 0 8px;
+}
+#painel-busca h3 { margin: 0; padding: 14px 16px; font-size: 15px; color: var(--forte); box-shadow: 0 1px 0 #0006; position: sticky; top: 0; background: #111214; z-index: 1; }
+#lista-busca { display: grid; gap: 8px; padding: 8px; }
+#lista-busca .vazio { margin: 16px; text-align: center; color: var(--texto-2); font-size: 14px; }
+.fixada-item.clicavel { cursor: pointer; }
+.fixada-item.clicavel:hover { background: var(--hover); }
+.busca-onde { font-size: 12px; font-weight: 600; color: var(--texto-2); }
+@media (max-width: 760px) {
+  .busca, .busca:focus-within { width: 120px; }
+}
+
+/* ---------- status ---------- */
+.avatar .status-dot[data-status="ausente"] { background: #f0b232; }
+.avatar .status-dot[data-status="ocupado"] { background: var(--vermelho); }
+.avatar .status-dot[data-status="invisivel"] { background: #80848e; }
+.eu { cursor: pointer; }
+#menu-status { position: fixed; width: 260px; padding: 8px; display: grid; gap: 2px; }
+#menu-status input { margin-bottom: 6px; font-size: 14px; }
+#menu-status hr { width: 100%; border: 0; border-top: 1px solid #ffffff14; margin: 4px 0; }
+#menu-status .menu-botao { justify-content: flex-start; }
+#menu-status .menu-botao small { display: block; font-size: 12px; opacity: .7; }
+#menu-status .menu-botao.ativo { background: var(--ativo); }
+.bolinha { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--verde); }
+.bolinha[data-status="ausente"] { background: #f0b232; }
+.bolinha[data-status="ocupado"] { background: var(--vermelho); }
+.bolinha[data-status="invisivel"] { background: #80848e; }
+.perfil-status-texto { margin: 4px 0 0; font-size: 14px; color: var(--texto); }
+
+/* ---------- menções / mensagens novas na barra ---------- */
+.badge-mencao {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--vermelho);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  flex: none;
+}
+.canal .badge-mencao { margin-left: auto; }
+.rail-item .badge-mencao {
+  position: absolute;
+  right: 6px;
+  bottom: -2px;
+  height: 20px;
+  min-width: 20px;
+  line-height: 14px;
+  border: 3px solid var(--rail);
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+/* ---------- mensagens diretas ---------- */
+.icone-dm { background: var(--chat); color: var(--texto); }
+.icone-dm .ic { width: 24px; height: 24px; }
+#btn-dms:hover .icone-dm, #btn-dms.ativo .icone-dm { background: var(--acento); color: #fff; }
+.lista-dms { flex: 1; overflow-y: auto; padding: 8px; }
+.lista-dms ul { list-style: none; margin: 0; padding: 0; }
+.titulo-dms { padding: 12px 8px 6px; font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--texto-2); }
+.canal.dm { height: 42px; gap: 10px; }
+.canal.dm .avatar { width: 32px; height: 32px; font-size: 13px; }
+.canal.dm > span:not(.avatar):not(.badge-mencao) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dica-dms { margin: 8px; font-size: 13px; color: var(--texto-2); }
+.btn-menu-servidor.sem-menu { cursor: default; }
+.btn-menu-servidor.sem-menu .ic { display: none; }
+.perfil-acoes { flex-wrap: wrap; }
+
+/* ---------- atalhos nas configurações ---------- */
+.cfg-secao { margin: 8px 0 0; font-size: 12px; text-transform: uppercase; color: var(--texto-2); }
+.btn-tecla {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #1e1f22;
+  color: var(--forte);
+  font: inherit;
+  font-size: 14px;
+  text-transform: none;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.btn-tecla:hover { border-color: #4e5058; }
+.btn-tecla.capturando { border-color: var(--vermelho); color: var(--vermelho); }

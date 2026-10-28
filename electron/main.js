@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, desktopCapturer, globalShortcut, ipcMain, ses
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import { iniciarAtualizador } from './atualizador.js';
 
 // Onde o Concord roda (VPS). O app abre direto nele; criar/entrar em servidores é feito lá dentro.
@@ -102,17 +103,96 @@ function escolherFonte(fontes) {
 }
 
 // ---------- IPC ----------
-// Atalhos que funcionam mesmo com o jogo em foco (só enquanto está numa chamada)
-const ATALHOS = { 'CommandOrControl+Shift+M': 'mudo', 'CommandOrControl+Shift+D': 'surdo' };
-ipcMain.handle('desktop:atalhos', (e, ligar) => {
-  if (e.sender !== janela?.webContents) return false;
-  globalShortcut.unregisterAll();
-  if (!ligar) return true;
-  let ok = true;
-  for (const [tecla, acao] of Object.entries(ATALHOS)) {
-    ok = globalShortcut.register(tecla, () => janela?.webContents.send('desktop:atalho', acao)) && ok;
+// Hook de teclado/mouse do sistema: vê a tecla do "apertar pra falar" até com o jogo em foco.
+// Opcional: se não carregar, o apertar pra falar só funciona com a janela em foco.
+let hook = null;
+function carregarHook() {
+  if (hook === null) {
+    try {
+      hook = createRequire(import.meta.url)('uiohook-napi');
+    } catch (err) {
+      console.error('Sem hook de teclado', err);
+      hook = false;
+    }
   }
-  return ok;
+  return hook;
+}
+
+const BOTOES_MOUSE = { Mouse3: 3, Mouse4: 4, Mouse5: 5 };
+const MODIFICADORES = {
+  ControlLeft: 'Ctrl', ControlRight: 'CtrlRight', ShiftLeft: 'Shift', ShiftRight: 'ShiftRight',
+  AltLeft: 'Alt', AltRight: 'AltRight', MetaLeft: 'Meta', MetaRight: 'MetaRight',
+};
+let ptt = null; // { tecla } ou { botao }
+let pttApertado = false;
+let hookLigado = false;
+let ouvintes = false;
+
+function avisarPtt(apertado) {
+  if (apertado === pttApertado) return;
+  pttApertado = apertado;
+  janela?.webContents.send('desktop:ptt', apertado);
+}
+
+// code = KeyboardEvent.code do navegador (KeyV, CapsLock…) ou Mouse3/4/5; null desliga
+function configurarPtt(code) {
+  ptt = null;
+  avisarPtt(false);
+  if (!code) {
+    if (hookLigado) hook.uIOhook.stop();
+    hookLigado = false;
+    return false;
+  }
+  const h = carregarHook();
+  if (!h) return false;
+  if (code in BOTOES_MOUSE) {
+    ptt = { botao: BOTOES_MOUSE[code] };
+  } else {
+    const tecla = h.UiohookKey[MODIFICADORES[code] ?? code.replace(/^Key|^Digit/, '')];
+    if (tecla == null) return false;
+    ptt = { tecla };
+  }
+  if (!ouvintes) {
+    h.uIOhook.on('keydown', (e) => e.keycode === ptt?.tecla && avisarPtt(true));
+    h.uIOhook.on('keyup', (e) => e.keycode === ptt?.tecla && avisarPtt(false));
+    h.uIOhook.on('mousedown', (e) => e.button === ptt?.botao && avisarPtt(true));
+    h.uIOhook.on('mouseup', (e) => e.button === ptt?.botao && avisarPtt(false));
+    ouvintes = true;
+  }
+  if (!hookLigado) {
+    try {
+      h.uIOhook.start();
+    } catch (err) {
+      console.error('Hook de teclado não iniciou', err);
+      ptt = null;
+      return false;
+    }
+    hookLigado = true;
+  }
+  return true;
+}
+
+// Atalhos que funcionam mesmo com o jogo em foco (só enquanto está numa chamada)
+const ATALHOS_PADRAO = { mudo: 'Ctrl+Shift+M', surdo: 'Ctrl+Shift+D' };
+ipcMain.handle('desktop:atalhos', (e, cfg) => {
+  if (e.sender !== janela?.webContents) return false;
+  // a página antiga manda só true/false
+  const { ligar, mudo, surdo, ptt: teclaPtt } = cfg && typeof cfg === 'object' ? cfg : { ligar: !!cfg, ...ATALHOS_PADRAO };
+  globalShortcut.unregisterAll();
+  if (!ligar) {
+    configurarPtt(null);
+    return { ok: true, ptt: false };
+  }
+  let ok = true;
+  for (const [atalho, acao] of [[mudo, 'mudo'], [surdo, 'surdo']]) {
+    if (!atalho) continue;
+    try {
+      ok = globalShortcut.register(atalho, () => janela?.webContents.send('desktop:atalho', acao)) && ok;
+    } catch {
+      ok = false; // atalho inválido
+    }
+  }
+  return { ok, ptt: configurarPtt(teclaPtt) };
 });
 
 // ---------- inicialização ----------
@@ -150,5 +230,8 @@ app.on('second-instance', () => {
   if (janela.isMinimized()) janela.restore();
   janela.focus();
 });
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  configurarPtt(null);
+});
 app.on('window-all-closed', () => app.quit());

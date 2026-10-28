@@ -45,6 +45,25 @@ const corDaConta = (conta) => conta.cor || corDoNome(conta.nome);
 const idDeStream = (v) => (typeof v === 'string' && v.length <= 100 ? v : null);
 
 const MAX_IMAGEM = 10 * 1024 * 1024;
+const MAX_ARQUIVO = 25 * 1024 * 1024; // outros arquivos (vídeo, zip…)
+const MAX_REACOES_DIFERENTES = 20; // emojis diferentes por mensagem
+const PAGINA = 50; // mensagens por vez no histórico
+const BACKUPS_MANTIDOS = 7; // um por dia
+const STATUS = ['online', 'ausente', 'ocupado', 'invisivel'];
+// Um emoji (com tom de pele, variação e combinações tipo 👨‍👩‍👧)
+const EMOJI_RE = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3)(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}]|\u200D\p{Extended_Pictographic}\uFE0F?)*$/u;
+// Arquivos que o navegador mostra direto; o resto sempre baixa (nunca abre como página)
+const EXT_EXIBIVEIS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mov', 'mp3', 'ogg', 'wav', 'm4a', 'pdf', 'txt']);
+
+function limparNomeArquivo(nome) {
+  nome = String(nome ?? '').replace(/[\p{C}/\\:*?"<>|]/gu, '_').replace(/\s+/g, ' ').trim().replace(/^\.+/, '');
+  if (!nome) nome = 'arquivo';
+  if ([...nome].length > 100) {
+    const ext = nome.match(/\.[\p{L}\p{N}]{1,8}$/u)?.[0] ?? '';
+    nome = [...nome].slice(0, 100 - ext.length).join('') + ext;
+  }
+  return nome;
+}
 const MAX_TEXTO = 2000;
 const MAX_BIO = 190;
 const COR_RE = /^#[0-9a-f]{6}$/i;
@@ -173,11 +192,20 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       entrou_em INTEGER NOT NULL,
       PRIMARY KEY (servidor, conta)
     );
+    CREATE TABLE IF NOT EXISTS reacoes (
+      mensagem INTEGER NOT NULL,
+      conta INTEGER NOT NULL,
+      emoji TEXT NOT NULL,
+      PRIMARY KEY (mensagem, conta, emoji)
+    );
   `);
   // Colunas que chegaram depois: bancos antigos ganham elas sem perder nada
   const colunasNovas = {
-    contas: { nome: 'TEXT', cor: 'TEXT', avatar: 'TEXT', bio: "TEXT NOT NULL DEFAULT ''", admin: 'INTEGER NOT NULL DEFAULT 0' },
-    mensagens: { conta: 'INTEGER', editado_em: 'INTEGER', fixada: 'INTEGER NOT NULL DEFAULT 0', canal_id: 'INTEGER' },
+    contas: {
+      nome: 'TEXT', cor: 'TEXT', avatar: 'TEXT', bio: "TEXT NOT NULL DEFAULT ''", admin: 'INTEGER NOT NULL DEFAULT 0',
+      status: "TEXT NOT NULL DEFAULT 'online'", status_texto: "TEXT NOT NULL DEFAULT ''",
+    },
+    mensagens: { conta: 'INTEGER', editado_em: 'INTEGER', fixada: 'INTEGER NOT NULL DEFAULT 0', canal_id: 'INTEGER', resposta: 'INTEGER' },
     canais: { servidor: 'INTEGER' },
   };
   for (const [tabela, colunas] of Object.entries(colunasNovas)) {
@@ -192,6 +220,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     CREATE INDEX IF NOT EXISTS idx_mensagens_canal_id ON mensagens (canal_id, id);
     CREATE INDEX IF NOT EXISTS idx_mensagens_fixadas_id ON mensagens (canal_id, fixada);
     CREATE INDEX IF NOT EXISTS idx_membros_conta ON membros (conta);
+    CREATE INDEX IF NOT EXISTS idx_canais_tipo_nome ON canais (tipo, nome);
   `);
   const novoConvite = () => {
     for (;;) {
@@ -210,6 +239,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     trocarNome: db.prepare('UPDATE contas SET nome = ? WHERE id = ?'),
     trocarPerfil: db.prepare('UPDATE contas SET cor = ?, bio = ? WHERE id = ?'),
     trocarAvatar: db.prepare('UPDATE contas SET avatar = ? WHERE id = ?'),
+    trocarStatus: db.prepare('UPDATE contas SET status = ?, status_texto = ? WHERE id = ?'),
     renomearMensagens: db.prepare('UPDATE mensagens SET autor = ?, cor = ? WHERE autor = ?'),
     recolorirMensagens: db.prepare('UPDATE mensagens SET cor = ? WHERE autor = ?'),
     criarSessao: db.prepare('INSERT INTO sessoes (token, conta, criado_em) VALUES (?, ?, ?)'),
@@ -234,8 +264,18 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     apagarMembros: db.prepare('DELETE FROM membros WHERE servidor = ?'),
     definirAdmin: db.prepare('UPDATE membros SET admin = ? WHERE servidor = ? AND conta = ?'),
 
-    inserirMensagem: db.prepare('INSERT INTO mensagens (canal, canal_id, autor, cor, texto, criado_em, conta) VALUES (?, ?, ?, ?, ?, ?, ?)'),
-    historico: db.prepare('SELECT * FROM (SELECT * FROM mensagens WHERE canal_id = ? ORDER BY id DESC LIMIT 100) ORDER BY id'),
+    inserirMensagem: db.prepare('INSERT INTO mensagens (canal, canal_id, autor, cor, texto, criado_em, conta, resposta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+    historico: db.prepare(`SELECT * FROM (SELECT * FROM mensagens WHERE canal_id = ? ORDER BY id DESC LIMIT ${PAGINA}) ORDER BY id`),
+    historicoAntes: db.prepare(`SELECT * FROM (SELECT * FROM mensagens WHERE canal_id = ? AND id < ? ORDER BY id DESC LIMIT ${PAGINA}) ORDER BY id`),
+    buscar: db.prepare(`SELECT m.* FROM mensagens m JOIN json_each(?) c ON c.value = m.canal_id
+      WHERE m.texto LIKE ? ESCAPE '\\' AND m.texto NOT LIKE '/uploads/%' ORDER BY m.id DESC LIMIT 25`),
+    reacoes: db.prepare('SELECT emoji, conta FROM reacoes WHERE mensagem = ? ORDER BY rowid'),
+    temReacao: db.prepare('SELECT 1 FROM reacoes WHERE mensagem = ? AND conta = ? AND emoji = ?'),
+    emojisDiferentes: db.prepare('SELECT COUNT(DISTINCT emoji) AS n FROM reacoes WHERE mensagem = ?'),
+    reagir: db.prepare('INSERT INTO reacoes (mensagem, conta, emoji) VALUES (?, ?, ?)'),
+    desreagir: db.prepare('DELETE FROM reacoes WHERE mensagem = ? AND conta = ? AND emoji = ?'),
+    apagarReacoes: db.prepare('DELETE FROM reacoes WHERE mensagem = ?'),
+    apagarReacoesDoCanal: db.prepare('DELETE FROM reacoes WHERE mensagem IN (SELECT id FROM mensagens WHERE canal_id = ?)'),
     fixadas: db.prepare('SELECT * FROM mensagens WHERE canal_id = ? AND fixada = 1 ORDER BY id DESC'),
     mensagem: db.prepare('SELECT * FROM mensagens WHERE id = ?'),
     editarMensagem: db.prepare('UPDATE mensagens SET texto = ?, editado_em = ? WHERE id = ?'),
@@ -251,8 +291,31 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     posicaoCanal: db.prepare('UPDATE canais SET posicao = ? WHERE id = ?'),
     apagarCanal: db.prepare('DELETE FROM canais WHERE id = ?'),
     apagarMensagensDoCanal: db.prepare('DELETE FROM mensagens WHERE canal_id = ?'),
+
+    // conversa direta: canal tipo 'dm' sem servidor, nome "menorId:maiorId"
+    dmPorNome: db.prepare("SELECT * FROM canais WHERE tipo = 'dm' AND nome = ?"),
+    criarDm: db.prepare("INSERT INTO canais (servidor, tipo, nome, topico, posicao) VALUES (NULL, 'dm', ?, '', 0)"),
+    dmsDa: db.prepare(`SELECT c.*, (SELECT MAX(criado_em) FROM mensagens WHERE canal_id = c.id) AS ultima FROM canais c
+      WHERE c.tipo = 'dm' AND (c.nome LIKE ? OR c.nome LIKE ?)`),
+    compartilhamServidor: db.prepare('SELECT 1 FROM membros a JOIN membros b ON a.servidor = b.servidor WHERE a.conta = ? AND b.conta = ?'),
   };
   const limitador = criarLimitador();
+
+  // Cópia do banco uma vez por dia (pasta backups/), guardando as últimas 7
+  const pastaBackups = path.join(pastaDados, 'backups');
+  function fazerBackup() {
+    try {
+      fs.mkdirSync(pastaBackups, { recursive: true });
+      const arquivo = path.join(pastaBackups, `chat-${new Date().toISOString().slice(0, 10)}.db`);
+      if (!fs.existsSync(arquivo)) db.exec(`VACUUM INTO '${arquivo.replace(/'/g, "''")}'`);
+      const antigos = fs.readdirSync(pastaBackups).filter((f) => /^chat-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort().slice(0, -BACKUPS_MANTIDOS);
+      antigos.forEach((f) => fs.rmSync(path.join(pastaBackups, f)));
+    } catch (err) {
+      console.error('Erro no backup', err);
+    }
+  }
+  fazerBackup();
+  const timerBackup = setInterval(fazerBackup, 60 * 60 * 1000); // confere de hora em hora
 
   function novaSessao(contaId) {
     const token = randomBytes(32).toString('base64url');
@@ -278,6 +341,22 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     return { url: `/uploads/${arquivo}` };
   }
 
+  // Qualquer arquivo: fica em /uploads/<pasta>/<nome original>
+  async function salvarArquivo(nome, dados) {
+    if (!Buffer.isBuffer(dados) || !dados.length) return { erro: 'Arquivo vazio' };
+    if (dados.length > MAX_ARQUIVO) return { erro: 'Arquivo grande demais (máx. 25 MB)' };
+    if (extensaoDaImagem(dados) && dados.length <= MAX_IMAGEM) return salvarImagem(dados);
+    const pasta = randomBytes(12).toString('hex');
+    const limpo = limparNomeArquivo(nome);
+    try {
+      await fs.promises.mkdir(path.join(pastaUploads, pasta));
+      await fs.promises.writeFile(path.join(pastaUploads, pasta, limpo), dados);
+    } catch {
+      return { erro: 'Não consegui salvar o arquivo' };
+    }
+    return { url: `/uploads/${pasta}/${encodeURIComponent(limpo)}` };
+  }
+
   // ---------- servidores (nome, ícone, canais, membros) ----------
   const canaisDe = (srv, tipo) => sql.canaisDo.all(srv).filter((c) => c.tipo === tipo);
   const ehMembro = (srv, conta) => !!sql.membro.get(srv, conta);
@@ -288,7 +367,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   // Canal de um servidor do qual a conta participa (ou null)
   function canalDoMembro(id, conta, tipo) {
     const c = sql.canal.get(Number(id));
-    if (!c || (tipo && c.tipo !== tipo) || !ehMembro(c.servidor, conta)) return null;
+    const tipoOk = !tipo || c?.tipo === tipo || (tipo === 'texto' && c?.tipo === 'dm');
+    if (!c || !tipoOk || !podeVerCanal(c, conta)) return null;
     return c;
   }
 
@@ -305,11 +385,37 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     const dono = sql.servidor.get(id)?.dono;
     return sql.perfis.all(id).map((p) => ({ ...p, cor: corDaConta(p), admin: !!p.admin || p.id === dono, dono: p.id === dono }));
   }
-  // Mensagem como o cliente vê: `canal` é o id do canal
-  const msgPublica = (m, servidor = sql.canal.get(m.canal_id)?.servidor) => ({
+  function reacoesDe(id) {
+    const porEmoji = new Map();
+    for (const r of sql.reacoes.all(id)) {
+      if (!porEmoji.has(r.emoji)) porEmoji.set(r.emoji, []);
+      porEmoji.get(r.emoji).push(r.conta);
+    }
+    return [...porEmoji].map(([emoji, contas]) => ({ emoji, contas }));
+  }
+  function respostaDe(id) {
+    if (!id) return null;
+    const r = sql.mensagem.get(id);
+    return r ? { id: r.id, autor: r.autor, conta: r.conta, texto: r.texto.slice(0, 200) } : { id, apagada: true };
+  }
+  // Mensagem como o cliente vê: `canal` é o id do canal (servidor null = conversa direta)
+  const msgPublica = (m, servidor = sql.canal.get(m.canal_id)?.servidor ?? null) => ({
     id: m.id, canal: m.canal_id, servidor, autor: m.autor, cor: m.cor, texto: m.texto,
     criado_em: m.criado_em, conta: m.conta, editado_em: m.editado_em, fixada: m.fixada,
+    resposta: respostaDe(m.resposta), reacoes: reacoesDe(m.id),
   });
+
+  // ---------- conversas diretas ----------
+  const ehDm = (c) => c.tipo === 'dm';
+  const contasDoDm = (c) => c.nome.split(':').map(Number);
+  const nomeDm = (a, b) => `${Math.min(a, b)}:${Math.max(a, b)}`;
+  const podeVerCanal = (c, conta) => (ehDm(c) ? contasDoDm(c).includes(conta) : ehMembro(c.servidor, conta));
+  const perfilBasico = (c) => c && { id: c.id, nome: c.nome, cor: corDaConta(c), avatar: c.avatar, bio: c.bio };
+  const dmsDa = (conta) => sql.dmsDa.all(`${conta}:%`, `%:${conta}`);
+  function dmPublico(c, conta) {
+    const outro = contasDoDm(c).find((x) => x !== conta) ?? conta;
+    return { id: c.id, outro: perfilBasico(sql.contaPorId.get(outro)), ultima: c.ultima ?? null };
+  }
 
   function criarServidor(nome, dono) {
     const { lastInsertRowid } = sql.criarServidor.run(nome, dono, novoConvite(), Date.now());
@@ -322,17 +428,34 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   // ---------- servidor ----------
   const app = express();
   app.use(express.static(path.join(raiz, 'public')));
-  app.use('/uploads', express.static(pastaUploads, { maxAge: '30d', immutable: true }));
+  // supressão de ruído forte (RNNoise) que roda no navegador
+  app.use('/vendor/ruido', express.static(path.join(raiz, 'node_modules/@sapphi-red/web-noise-suppressor/dist'), { maxAge: '7d' }));
+  app.use('/uploads', express.static(pastaUploads, {
+    maxAge: '30d',
+    immutable: true,
+    setHeaders: (res, arquivo) => {
+      // arquivo enviado nunca roda como página do site (nada de HTML/SVG com script)
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self'; media-src 'self'");
+      const ext = path.extname(arquivo).slice(1).toLowerCase();
+      if (!EXT_EXIBIVEIS.has(ext)) {
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(arquivo))}`);
+      }
+    },
+  }));
 
   const http = createServer(app);
-  const io = new Server(http, { maxHttpBufferSize: MAX_IMAGEM + 64 * 1024 });
+  const io = new Server(http, { maxHttpBufferSize: MAX_ARQUIVO + 64 * 1024 });
 
   const usuarios = new Map(); // socket.id -> usuário
   const previas = new Map(); // socket.id -> miniatura da tela que a pessoa está transmitindo
   const sala = (srv) => `s:${srv}`;
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
-  const publico = ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela }) => ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela });
+  const publico = ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto }) =>
+    ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto });
+  // eu.servidor = id do servidor aberto, ou 'dm' vendo as conversas diretas
   function emitirPresenca() {
     const membrosDe = new Map();
     const membrosDoServidor = (srv) => {
@@ -341,9 +464,13 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     };
     const todos = [...usuarios.values()];
     for (const eu of todos) {
-      const membros = eu.servidor ? membrosDoServidor(eu.servidor) : new Set();
-      const lista = todos.filter((o) => membros.has(o.conta) || (eu.voz && o.voz === eu.voz)).map(publico);
-      io.to(eu.id).emit('presenca', lista);
+      let membros = new Set();
+      if (eu.servidor === 'dm') membros = new Set([eu.conta, ...dmsDa(eu.conta).flatMap(contasDoDm)]);
+      else if (eu.servidor) membros = membrosDoServidor(eu.servidor);
+      const naCall = (o) => eu.voz != null && o.voz === eu.voz;
+      // invisível: some da lista dos outros, menos de quem está na mesma call (precisa pra chamada funcionar)
+      const lista = todos.filter((o) => naCall(o) || (membros.has(o.conta) && (o.status !== 'invisivel' || o.id === eu.id)));
+      io.to(eu.id).emit('presenca', lista.map(publico));
     }
   }
   const emitirServidor = (srv) => io.to(sala(srv)).emit('servidor', estadoServidor(srv));
@@ -355,6 +482,28 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     const lista = sql.servidoresDa.all(conta).map(resumoServidor);
     socketsDaConta(conta).forEach((s) => s.emit('servidores', lista));
   }
+  // Tira alguém do servidor (saiu ou foi expulso)
+  function removerMembro(srv, conta) {
+    sql.sairServidor.run(srv, conta);
+    socketsDaConta(conta).forEach((so) => so.leave(sala(srv)));
+    const canaisVoz = new Set(canaisDe(srv, 'voz').map((c) => c.id));
+    tirarDaVoz((o) => o.conta === conta && canaisVoz.has(o.voz));
+    for (const o of usuarios.values()) if (o.conta === conta && o.servidor === srv) o.servidor = null;
+    emitirServidores(conta);
+    emitirPerfis(srv);
+    emitirPresenca();
+  }
+  // Manda um evento pra quem vê o canal (servidor inteiro, ou as duas pessoas da DM)
+  function emitirNoCanal(c, evento, dados, semSocket = null) {
+    if (ehDm(c)) {
+      for (const conta of contasDoDm(c)) socketsDaConta(conta).forEach((so) => so.id !== semSocket && so.emit(evento, dados));
+    } else if (semSocket) {
+      io.sockets.sockets.get(semSocket)?.to(sala(c.servidor)).emit(evento, dados);
+    } else {
+      io.to(sala(c.servidor)).emit(evento, dados);
+    }
+  }
+
   // Tira da call quem estava num canal de voz que deixou de existir / que a pessoa não pode mais ver
   function tirarDaVoz(filtro) {
     for (const o of usuarios.values()) {
@@ -457,7 +606,9 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         id: socket.id,
         nome: conta.nome,
         cor: corDaConta(conta),
-        servidor: null, // servidor aberto na tela
+        servidor: null, // servidor aberto na tela ('dm' = conversas diretas)
+        status: STATUS.includes(conta.status) ? conta.status : 'online',
+        statusTexto: conta.status_texto ?? '',
         voz: null, // id do canal de voz
         mudo: false,
         surdo: false,
@@ -473,6 +624,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         conta: conta.id,
         nome: conta.nome,
         usuario: conta.usuario,
+        status: conta.status,
+        statusTexto: conta.status_texto,
         prefs: JSON.parse(conta.prefs),
         servidores: servidores.map(resumoServidor),
         iceServers: ICE_SERVERS,
@@ -522,14 +675,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const s = sql.servidor.get(Number(id));
       if (!s || !ehMembro(s.id, u.conta)) return ack({ erro: 'Você não está nesse servidor' });
       if (s.dono === u.conta) return ack({ erro: 'Você é o dono: pra sair, apague o servidor' });
-      sql.sairServidor.run(s.id, u.conta);
-      socketsDaConta(u.conta).forEach((so) => so.leave(sala(s.id)));
-      const canaisVoz = new Set(canaisDe(s.id, 'voz').map((c) => c.id));
-      tirarDaVoz((o) => o.conta === u.conta && canaisVoz.has(o.voz));
-      for (const o of usuarios.values()) if (o.conta === u.conta && o.servidor === s.id) o.servidor = null;
-      emitirServidores(u.conta);
-      emitirPerfis(s.id);
-      emitirPresenca();
+      removerMembro(s.id, u.conta);
       ack({});
     });
 
@@ -541,6 +687,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const canaisVoz = new Set(canais.filter((c) => c.tipo === 'voz').map((c) => c.id));
       tirarDaVoz((o) => canaisVoz.has(o.voz));
       canais.forEach((c) => {
+        sql.apagarReacoesDoCanal.run(c.id);
         sql.apagarMensagensDoCanal.run(c.id);
         sql.apagarCanal.run(c.id);
       });
@@ -580,6 +727,19 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       ack({});
     });
 
+    quandoAdmin('membro:expulsar', (u, { conta } = {}, ack, srv) => {
+      conta = Number(conta);
+      const s = sql.servidor.get(srv);
+      const alvo = sql.membro.get(srv, conta);
+      if (!alvo) return ack({ erro: 'Essa pessoa não está no servidor' });
+      if (conta === u.conta) return ack({ erro: 'Pra sair, use "Sair do servidor"' });
+      if (conta === s.dono) return ack({ erro: 'O dono não pode ser expulso' });
+      if (alvo.admin && u.conta !== s.dono) return ack({ erro: 'Só o dono pode expulsar um admin' });
+      socketsDaConta(conta).forEach((so) => so.emit('servidor:expulso', { id: srv, nome: s.nome }));
+      removerMembro(srv, conta);
+      ack({});
+    });
+
     quandoAdmin('admin:definir', (u, { conta, admin } = {}, ack, srv) => {
       conta = Number(conta);
       if (!ehMembro(srv, conta)) return ack({ erro: 'Essa pessoa não está no servidor' });
@@ -587,6 +747,37 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       sql.definirAdmin.run(admin ? 1 : 0, srv, conta);
       emitirPerfis(srv);
       ack({});
+    });
+
+    // ---------- status ----------
+    quando('status', (u, { status, texto } = {}, ack) => {
+      if (!STATUS.includes(status)) return ack({ erro: 'Status inválido' });
+      texto = String(texto ?? '').replace(/[\p{C}]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+      sql.trocarStatus.run(status, texto, u.conta);
+      Object.assign(u, { status, statusTexto: texto });
+      emitirPresenca();
+      ack({});
+    });
+
+    // ---------- conversas diretas ----------
+    quando('dm:lista', (u, _, ack) => {
+      u.servidor = 'dm';
+      const lista = dmsDa(u.conta).map((c) => dmPublico(c, u.conta)).sort((a, b) => (b.ultima ?? 0) - (a.ultima ?? 0));
+      ack({ dms: lista, eu: perfilBasico(sql.contaPorId.get(u.conta)) });
+      emitirPresenca();
+    });
+
+    quando('dm:abrir', (u, { conta } = {}, ack) => {
+      conta = Number(conta);
+      const outro = sql.contaPorId.get(conta);
+      if (!outro || conta === u.conta) return ack({ erro: 'Pessoa não encontrada' });
+      let c = sql.dmPorNome.get(nomeDm(u.conta, conta));
+      if (!c) {
+        // só cria conversa com quem está em algum servidor seu
+        if (!sql.compartilhamServidor.get(u.conta, conta)) return ack({ erro: 'Vocês precisam estar num mesmo servidor' });
+        c = sql.canal.get(Number(sql.criarDm.run(nomeDm(u.conta, conta)).lastInsertRowid));
+      }
+      ack({ dm: dmPublico(c, u.conta) });
     });
 
     // ---------- perfil ----------
@@ -686,8 +877,12 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (!canal) return ack({ erro: 'Só admin pode fazer isso' });
       if (canaisDe(canal.servidor, canal.tipo).length <= 1) return ack({ erro: 'Precisa sobrar pelo menos um canal desse tipo' });
       sql.apagarCanal.run(canal.id);
-      if (canal.tipo === 'texto') sql.apagarMensagensDoCanal.run(canal.id);
-      else tirarDaVoz((o) => o.voz === canal.id);
+      if (canal.tipo === 'texto') {
+        sql.apagarReacoesDoCanal.run(canal.id);
+        sql.apagarMensagensDoCanal.run(canal.id);
+      } else {
+        tirarDaVoz((o) => o.voz === canal.id);
+      }
       io.to(sala(canal.servidor)).emit('canal:apagado', { id: canal.id, tipo: canal.tipo, nome: canal.nome, servidor: canal.servidor });
       emitirServidor(canal.servidor);
       emitirPresenca();
@@ -695,9 +890,23 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     });
 
     // ---------- chat ----------
-    quando('historico', (u, canal, ack) => {
+    // historico(canal) = mais recentes; historico({ canal, antes }) = a página anterior a essa mensagem
+    quando('historico', (u, pedido, ack) => {
+      const { canal, antes } = typeof pedido === 'object' && pedido !== null ? pedido : { canal: pedido };
       const c = canalDoMembro(canal, u.conta, 'texto');
-      ack(c ? sql.historico.all(c.id).map((m) => msgPublica(m, c.servidor)) : []);
+      if (!c) return ack([]);
+      const linhas = antes ? sql.historicoAntes.all(c.id, Number(antes)) : sql.historico.all(c.id);
+      ack(linhas.map((m) => msgPublica(m, c.servidor)));
+    });
+
+    // Busca no servidor aberto (ou nas suas DMs)
+    quando('buscar', (u, { termo } = {}, ack) => {
+      termo = String(termo ?? '').trim();
+      if ([...termo].length < 2) return ack({ erro: 'Digite pelo menos 2 letras' });
+      const canais = u.servidor === 'dm' ? dmsDa(u.conta) : u.servidor ? canaisDe(u.servidor, 'texto') : [];
+      const ids = JSON.stringify(canais.map((c) => c.id));
+      const padrao = `%${termo.slice(0, 100).replace(/[\\%_]/g, (x) => `\\${x}`)}%`;
+      ack({ resultados: sql.buscar.all(ids, padrao).map((m) => msgPublica(m)) });
     });
 
     quando('fixadas', (u, canal, ack) => {
@@ -705,16 +914,27 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       ack(c ? sql.fixadas.all(c.id).map((m) => msgPublica(m, c.servidor)) : []);
     });
 
-    function publicar(u, c, texto) {
-      const { lastInsertRowid } = sql.inserirMensagem.run(c.nome, c.id, u.nome, u.cor, texto, Date.now(), u.conta);
-      io.to(sala(c.servidor)).emit('mensagem', msgPublica(sql.mensagem.get(Number(lastInsertRowid)), c.servidor));
+    function publicar(u, c, texto, resposta = null) {
+      // só responde mensagem do mesmo canal
+      if (resposta && sql.mensagem.get(Number(resposta))?.canal_id !== c.id) resposta = null;
+      const { lastInsertRowid } = sql.inserirMensagem.run(c.nome, c.id, u.nome, u.cor, texto, Date.now(), u.conta, resposta ? Number(resposta) : null);
+      emitirNoCanal(c, 'mensagem', msgPublica(sql.mensagem.get(Number(lastInsertRowid)), c.servidor));
     }
 
-    quando('mensagem', (u, { canal, texto } = {}) => {
+    quando('mensagem', (u, { canal, texto, resposta } = {}) => {
       const c = canalDoMembro(canal, u.conta, 'texto');
       if (!c) return;
       texto = String(texto ?? '').trim().slice(0, MAX_TEXTO);
-      if (texto) publicar(u, c, texto);
+      if (texto) publicar(u, c, texto, resposta);
+    });
+
+    quando('arquivo', async (u, { canal, nome, dados, resposta } = {}, ack) => {
+      const c = canalDoMembro(canal, u.conta, 'texto');
+      if (!c) return ack({ erro: 'Esse canal não existe mais' });
+      const r = await salvarArquivo(nome, dados);
+      if (r.erro) return ack(r);
+      publicar(u, c, r.url, resposta);
+      ack({});
     });
 
     quando('imagem', async (u, { canal, dados } = {}, ack) => {
@@ -730,18 +950,18 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     function mensagemDoMembro(id, conta) {
       const m = sql.mensagem.get(Number(id));
       const c = m && sql.canal.get(m.canal_id);
-      return c && ehMembro(c.servidor, conta) ? { m, c } : {};
+      return c && podeVerCanal(c, conta) ? { m, c } : {};
     }
 
     quando('msg:editar', (u, { id, texto } = {}, ack) => {
       const { m, c } = mensagemDoMembro(id, u.conta);
       if (!m) return ack({ erro: 'Mensagem não encontrada' });
       if (m.conta !== u.conta) return ack({ erro: 'Só dá pra editar as suas mensagens' });
-      if (m.texto.startsWith('/uploads/')) return ack({ erro: 'Imagem não dá pra editar' });
+      if (m.texto.startsWith('/uploads/')) return ack({ erro: 'Arquivo não dá pra editar' });
       texto = String(texto ?? '').trim().slice(0, MAX_TEXTO);
       if (!texto) return ack({ erro: 'Mensagem vazia' });
       sql.editarMensagem.run(texto, Date.now(), m.id);
-      io.to(sala(c.servidor)).emit('msg:atualizada', msgPublica(sql.mensagem.get(m.id), c.servidor));
+      emitirNoCanal(c, 'msg:atualizada', msgPublica(sql.mensagem.get(m.id), c.servidor));
       ack({});
     });
 
@@ -750,22 +970,39 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (!m) return ack({ erro: 'Mensagem não encontrada' });
       if (m.conta !== u.conta && !ehAdminDe(c.servidor, u.conta)) return ack({ erro: 'Só dá pra apagar as suas mensagens' });
       sql.apagarMensagem.run(m.id);
-      io.to(sala(c.servidor)).emit('msg:apagada', { id: m.id, canal: c.id, servidor: c.servidor });
+      sql.apagarReacoes.run(m.id);
+      emitirNoCanal(c, 'msg:apagada', { id: m.id, canal: c.id, servidor: c.servidor });
       ack({});
     });
 
     quando('msg:fixar', (u, { id, fixar } = {}, ack) => {
       const { m, c } = mensagemDoMembro(id, u.conta);
       if (!m) return ack({ erro: 'Mensagem não encontrada' });
-      if (!ehAdminDe(c.servidor, u.conta)) return ack({ erro: 'Só admin pode fazer isso' });
+      if (!ehDm(c) && !ehAdminDe(c.servidor, u.conta)) return ack({ erro: 'Só admin pode fazer isso' });
       sql.fixarMensagem.run(fixar ? 1 : 0, m.id);
-      io.to(sala(c.servidor)).emit('msg:atualizada', msgPublica(sql.mensagem.get(m.id), c.servidor));
+      emitirNoCanal(c, 'msg:atualizada', msgPublica(sql.mensagem.get(m.id), c.servidor));
+      ack({});
+    });
+
+    quando('msg:reagir', (u, { id, emoji } = {}, ack) => {
+      const { m, c } = mensagemDoMembro(id, u.conta);
+      if (!m) return ack({ erro: 'Mensagem não encontrada' });
+      emoji = String(emoji ?? '');
+      if (emoji.length > 32 || !EMOJI_RE.test(emoji)) return ack({ erro: 'Emoji inválido' });
+      if (sql.temReacao.get(m.id, u.conta, emoji)) {
+        sql.desreagir.run(m.id, u.conta, emoji);
+      } else {
+        const jaTem = sql.reacoes.all(m.id).some((r) => r.emoji === emoji);
+        if (!jaTem && sql.emojisDiferentes.get(m.id).n >= MAX_REACOES_DIFERENTES) return ack({ erro: 'Essa mensagem já tem emojis demais' });
+        sql.reagir.run(m.id, u.conta, emoji);
+      }
+      emitirNoCanal(c, 'msg:atualizada', msgPublica(sql.mensagem.get(m.id), c.servidor));
       ack({});
     });
 
     quando('digitando', (u, canal) => {
       const c = canalDoMembro(canal, u.conta, 'texto');
-      if (c) socket.to(sala(c.servidor)).emit('digitando', { canal: c.id, nome: u.nome });
+      if (c) emitirNoCanal(c, 'digitando', { canal: c.id, nome: u.nome }, socket.id);
     });
 
     // ---------- voz ----------
@@ -823,7 +1060,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         porta,
         host,
         // só resolve depois que a porta foi liberada (dá pra subir de novo na mesma porta logo em seguida)
-        fechar: () => new Promise((r) => io.close(() => { db.close(); r(); })),
+        fechar: () => new Promise((r) => io.close(() => { clearInterval(timerBackup); db.close(); r(); })),
       });
     });
   });
@@ -831,7 +1068,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
 
 // Bancos da época de um servidor só: tudo vira o primeiro servidor, e o admin mais antigo vira o dono
 function migrarServidorUnico(db, novoConvite) {
-  if (!db.prepare('SELECT 1 FROM canais WHERE servidor IS NULL').get()) return;
+  if (!db.prepare("SELECT 1 FROM canais WHERE servidor IS NULL AND tipo != 'dm'").get()) return;
   const config = (chave) => db.prepare('SELECT valor FROM config WHERE chave = ?').get(chave)?.valor ?? null;
   const dono = db.prepare('SELECT MIN(id) AS id FROM contas WHERE admin = 1').get().id
     ?? db.prepare('SELECT MIN(id) AS id FROM contas').get().id;
@@ -840,7 +1077,7 @@ function migrarServidorUnico(db, novoConvite) {
     const { lastInsertRowid } = db.prepare('INSERT INTO servidores (nome, icone, dono, convite, criado_em) VALUES (?, ?, ?, ?, ?)')
       .run(config('nome') ?? NOME_SERVIDOR_PADRAO, config('icone'), dono, novoConvite(), Date.now());
     const id = Number(lastInsertRowid);
-    db.prepare('UPDATE canais SET servidor = ? WHERE servidor IS NULL').run(id);
+    db.prepare("UPDATE canais SET servidor = ? WHERE servidor IS NULL AND tipo != 'dm'").run(id);
     // mensagens antigas guardavam o nome do canal; agora apontam pro id
     db.exec(`UPDATE mensagens SET canal_id = (SELECT c.id FROM canais c WHERE c.tipo = 'texto' AND c.nome = mensagens.canal)
       WHERE canal_id IS NULL`);

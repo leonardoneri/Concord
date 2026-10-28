@@ -77,7 +77,7 @@ else
   git clone -q --depth 1 "$REPO" "$APP"
 fi
 # só o que o servidor usa (sem Electron)
-(cd "$APP" && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --omit=dev --no-audit --no-fund --loglevel=error)
+(cd "$APP" && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --omit=dev --omit=optional --no-audit --no-fund --loglevel=error)
 
 cat > /etc/systemd/system/concord.service <<EOF
 [Unit]
