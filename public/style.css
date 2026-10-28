@@ -1325,3 +1325,13 @@ textarea {
 #painel-assistir { position: fixed; width: min(400px, calc(100vw - 16px)); padding: 14px; display: grid; gap: 10px; }
 #painel-assistir h3 { margin: 0; font-size: 16px; color: var(--forte); }
 #painel-assistir p { margin: 0; font-size: 13px; color: var(--texto-2); line-height: 1.4; }
+
+/* ---------- qualidade da conexão ---------- */
+.ic.rede { width: 14px; height: 14px; flex: none; }
+.ic.rede-boa { color: var(--verde); }
+.ic.rede-media { color: #f0b232; }
+.ic.rede-ruim { color: var(--vermelho); }
+.nome-tile .ic.rede { display: inline-block; vertical-align: -2px; margin-left: 4px; }
+.info-voz .conectado.rede-media { color: #f0b232; }
+.info-voz .conectado.rede-ruim { color: var(--vermelho); }
+.info-voz .conectado { cursor: help; }

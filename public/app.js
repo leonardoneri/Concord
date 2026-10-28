@@ -953,6 +953,10 @@ function renderCanais() {
       if (u.id !== estado.eu.id && ajustes[u.nome]?.mudo) m.classList.add('silenciado-pra-mim');
       if (u.tela) m.append(el('span', 'badge-vivo', 'AO VIVO'));
       if (u.camera) m.append(icone('camera'));
+      if (u.voz === estado.voz && u.id !== estado.eu.id) {
+        const r = iconeRede(u.rede);
+        if (r) m.append(r);
+      }
       if (u.surdo) m.append(icone('foneOff'));
       else if (u.mudo) m.append(icone('micOff'));
       membros.append(m);
@@ -1964,6 +1968,8 @@ function sairVoz(avisarServidor = true) {
   estado.vozInfo = null;
   estado.assistir = null;
   fecharPlayer();
+  Object.assign(minhaRede, { ping: null, perda: null, ruinsSeguidas: 0, enviado: null });
+  minhaRede.porPeer.clear();
   miniaturas(false);
   membrosVoz = new Set();
   if (estado.view === 'voz') estado.view = 'texto';
@@ -2440,6 +2446,10 @@ function atualizarTile(tile, d) {
   }
   if (d.tipo === 'cam' && d.u.surdo) nome.append(icone('foneOff'));
   else if (d.tipo === 'cam' && d.u.mudo) nome.append(icone('micOff'));
+  if (d.tipo === 'cam' && !d.local) {
+    const r = iconeRede(d.u.rede);
+    if (r) nome.append(r);
+  }
 }
 
 const reforcos = new Map(); // "id:tipo" -> { stream, src, ganho } para volume acima de 100%
@@ -3429,6 +3439,92 @@ $('#painel-assistir').onsubmit = (e) => {
     fecharPopovers();
   });
 };
+
+// ---------- qualidade da conexão na chamada ----------
+// A cada 3 s cada um mede, nas próprias conexões diretas, o ping e quanto do áudio dos outros
+// se perdeu no caminho. O resumo vai pro servidor e todo mundo vê um sinal do lado do nome.
+const minhaRede = { ping: null, perda: null, porPeer: new Map(), ruinsSeguidas: 0, avisouEm: 0, enviado: null };
+
+function nivelRede(r) {
+  if (!r || r.ping == null) return null;
+  if (r.ping < 150 && r.perda < 3) return 'boa';
+  if (r.ping < 300 && r.perda < 10) return 'media';
+  return 'ruim';
+}
+const NOME_NIVEL = { boa: 'boa', media: 'instável', ruim: 'ruim' };
+function textoRede(r) {
+  const n = nivelRede(r);
+  return n ? `Conexão ${NOME_NIVEL[n]}: ping ${r.ping} ms, ${r.perda}% do áudio perdido` : 'Medindo a conexão…';
+}
+function iconeRede(r) {
+  const n = nivelRede(r);
+  if (!n) return null;
+  const i = icone('sinal', `rede rede-${n}`);
+  i.setAttribute('aria-label', textoRede(r));
+  const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+  t.textContent = textoRede(r);
+  i.prepend(t);
+  return i;
+}
+
+async function medirPeer(id, peer) {
+  const stats = await peer.pc.getStats();
+  let rtt = null;
+  let perdidos = 0;
+  let recebidos = 0;
+  stats.forEach((s) => {
+    if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded' && s.currentRoundTripTime != null) rtt = s.currentRoundTripTime * 1000;
+    if (s.type === 'inbound-rtp' && s.kind === 'audio') {
+      perdidos += s.packetsLost ?? 0;
+      recebidos += s.packetsReceived ?? 0;
+    }
+  });
+  const antes = minhaRede.porPeer.get(id);
+  minhaRede.porPeer.set(id, { perdidos, recebidos, rtt });
+  if (!antes || rtt == null) return null;
+  const dp = Math.max(0, perdidos - antes.perdidos);
+  const dr = Math.max(0, recebidos - antes.recebidos);
+  return { ping: rtt, perda: dp + dr ? (dp / (dp + dr)) * 100 : 0 };
+}
+
+async function medirRede() {
+  if (!estado.voz) return;
+  const medidas = (await Promise.all([...peers].filter(([, p]) => p.pc.connectionState === 'connected')
+    .map(([id, p]) => medirPeer(id, p).catch(() => null)))).filter(Boolean);
+  for (const id of minhaRede.porPeer.keys()) if (!peers.has(id)) minhaRede.porPeer.delete(id);
+  if (!medidas.length) {
+    minhaRede.ping = minhaRede.perda = null;
+  } else {
+    // a pior conexão é a que mais atrapalha; perda média (uma pessoa ruim não marca você como ruim)
+    minhaRede.ping = Math.round(Math.max(...medidas.map((m) => m.ping)));
+    minhaRede.perda = Math.round((medidas.reduce((s, m) => s + m.perda, 0) / medidas.length) * 10) / 10;
+  }
+  const r = minhaRede.ping == null ? null : { ping: minhaRede.ping, perda: minhaRede.perda };
+  // manda quando muda de nível, ou a cada ~15 s pra atualizar os números
+  const chave = nivelRede(r);
+  if (chave !== minhaRede.enviado?.nivel || Date.now() - (minhaRede.enviado?.em ?? 0) > 15_000) {
+    minhaRede.enviado = { nivel: chave, em: Date.now() };
+    socket.emit('rede', r);
+  }
+  // sua conexão está ruim faz um tempinho: avisa (no máximo a cada 2 min)
+  minhaRede.ruinsSeguidas = chave === 'ruim' ? minhaRede.ruinsSeguidas + 1 : 0;
+  if (minhaRede.ruinsSeguidas >= 3 && Date.now() - minhaRede.avisouEm > 120_000) {
+    minhaRede.avisouEm = Date.now();
+    avisar(`Sua conexão está ruim (ping ${r.ping} ms, ${r.perda}% perdido): sua voz pode estar picotando pros outros. Se puder, use cabo ou chegue perto do roteador.`, 10000);
+  }
+  renderRede();
+}
+setInterval(medirRede, 3000);
+
+// painel "Voz conectada": cor e detalhes da minha conexão
+function renderRede() {
+  const info = $('#painel-voz .conectado');
+  const r = minhaRede.ping == null ? null : { ping: minhaRede.ping, perda: minhaRede.perda };
+  const n = nivelRede(r);
+  info.classList.toggle('rede-media', n === 'media');
+  info.classList.toggle('rede-ruim', n === 'ruim');
+  info.title = peers.size ? textoRede(r) : 'Sozinho na sala';
+}
 
 function fecharPopovers() {
   $$('.popover').forEach((e) => (e.hidden = true));

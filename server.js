@@ -486,8 +486,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   const sala = (srv) => `s:${srv}`;
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
-  const publico = ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo }) =>
-    ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo });
+  const publico = ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo, rede }) =>
+    ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo, rede });
   // eu.servidor = id do servidor aberto, ou 'dm' vendo as conversas diretas
   function emitirPresenca() {
     const membrosDe = new Map();
@@ -1160,7 +1160,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     });
 
     quando('voz:sair', (u) => {
-      Object.assign(u, { voz: null, mic: null, camera: null, tela: null });
+      Object.assign(u, { voz: null, mic: null, camera: null, tela: null, rede: null });
       previas.delete(u.id);
       emitirPresenca();
       limparAssistir();
@@ -1188,6 +1188,19 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       ack({});
     });
     quando('assistir:estado', (u, _, ack) => ack(u.voz != null ? assistirPublico(u.voz) : null));
+
+    // qualidade da conexão da pessoa na chamada (ela mesma mede com quem está na sala)
+    quando('rede', (u, r) => {
+      if (u.voz == null) return;
+      const ping = Math.round(Number(r?.ping));
+      const perda = Math.round(Number(r?.perda) * 10) / 10;
+      const novo = Number.isFinite(ping) && Number.isFinite(perda)
+        ? { ping: Math.min(Math.max(ping, 0), 9999), perda: Math.min(Math.max(perda, 0), 100) }
+        : null;
+      if (JSON.stringify(novo) === JSON.stringify(u.rede ?? null)) return;
+      u.rede = novo;
+      emitirPresenca();
+    });
 
     quando('estado', (u, s = {}) => {
       u.mudo = !!s.mudo;
