@@ -1,0 +1,24 @@
+# Gera o instalador e publica no GitHub Releases sempre que uma tag de versão (v1.2.3) é enviada.
+# Lançar versão nova: npm run lancar
+name: Lançar versão
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

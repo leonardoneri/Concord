@@ -11,7 +11,7 @@
     "servidor": "node server.js",
     "dev": "node --watch server.js",
     "dist": "electron-builder --win --publish never",
-    "publicar": "electron-builder --win --publish always"
+    "lancar": "npm version patch && git push --follow-tags"
   },
   "engines": {
     "node": ">=22.13"
