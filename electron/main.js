@@ -7,7 +7,7 @@ import { abrirTunel, garantirCloudflared } from './tunel.js';
 import { iniciarAtualizador } from './atualizador.js';
 
 // Servidor fixo da galera (VPS). O app entra direto nele ao abrir. Vazio = sempre mostra o início.
-const SERVIDOR_DA_GALERA = '';
+const SERVIDOR_DA_GALERA = 'https://152-67-40-158.sslip.io';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const LAUNCHER = path.join(dir, 'launcher.html');
