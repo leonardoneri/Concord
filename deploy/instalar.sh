@@ -17,6 +17,13 @@ TURN_PORTAS=49160:49200
 [ "$(id -u)" = 0 ] || { echo "Rode com sudo."; exit 1; }
 passo() { printf '\n\033[1;35m==> %s\033[0m\n' "$*"; }
 
+# Máquinas pequenas (a Micro grátis da Oracle tem 1 GB): cria 2 GB de swap pra instalação não travar
+if [ "$(awk '/MemTotal/ {print $2}' /proc/meminfo)" -lt 2000000 ] && ! swapon --show | grep -q .; then
+  passo "Criando swap (máquina com pouca memória)"
+  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile && swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 passo "Instalando pacotes"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
