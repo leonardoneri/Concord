@@ -4,7 +4,7 @@ O contrário do Discord: um app caseiro pra jogar com os amigos (o servidor da g
 
 ## Baixar
 
-**[⬇️ Baixar o Concord](https://github.com/leonardoneri/concord/releases/latest/download/Concord-Setup.exe)**. Instale uma vez; depois o app avisa sozinho quando sai versão nova, e é só clicar em **Atualizar agora**.
+**[⬇️ Baixar o Concord](https://github.com/leonardoneri/Concord/releases/latest/download/Concord-Setup.exe)**. Instale uma vez; depois o app avisa sozinho quando sai versão nova, e é só clicar em **Atualizar agora**.
 
 ## Passo a passo
 
@@ -21,7 +21,7 @@ Seu PC precisa ficar com o app aberto enquanto a galera usa. O link muda toda ve
 
 > **Opção 1, sem instalar nada:** abra o link que mandei no Chrome ou no Edge, escolha um nome e pronto. Quando entrar na chamada, permita o microfone.
 >
-> **Opção 2, com o app (melhor pra compartilhar tela):** instale o app por este link: https://github.com/leonardoneri/concord/releases/latest/download/Concord-Setup.exe. Abra, cole o link em **Entrar com convite** e clique em **Entrar**.
+> **Opção 2, com o app (melhor pra compartilhar tela):** instale o app por este link: https://github.com/leonardoneri/Concord/releases/latest/download/Concord-Setup.exe. Abra, cole o link em **Entrar com convite** e clique em **Entrar**.
 >
 > Se aparecer "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo**. O aviso aparece porque o app não é assinado.
 
