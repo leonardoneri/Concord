@@ -1,5 +1,16 @@
 [
   {
+    "versao": "1.0.14",
+    "itens": [
+      "Assistir junto com fila: \"+ Vídeo\" põe na fila ou toca agora, cola link de playlist que entram todos os vídeos, e dá pra pular, tirar ou clicar em qualquer um da lista",
+      "Assistir junto diminui igual transmissão de tela: vira um bloco do tamanho dos outros (só pra você)",
+      "Seu próprio ping agora aparece no painel de voz, na sala e no seu bloco",
+      "Formatação no chat: **negrito**, *itálico*, __sublinhado__, ~~riscado~~, `código` e ||spoiler|| (clica pra ver)",
+      "Prévia de links: título, descrição e imagem do site. Link do YouTube tem botão pra assistir junto na chamada. Pra mandar sem prévia, coloque o link entre < >",
+      "Sortear times: botão de dado na chamada divide quem está na sala em 2, 3 ou 4 times e manda o resultado no chat"
+    ]
+  },
+  {
     "versao": "1.0.13",
     "itens": [
       "Assistir junto: botão na chamada pra ver um vídeo do YouTube sincronizado com a galera (play, pausa e pulo valem pra todo mundo)",
