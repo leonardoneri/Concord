@@ -29,7 +29,6 @@
     "appId": "com.leonardoneri.concord",
     "productName": "Concord",
     "files": [
-      "server.js",
       "public/**",
       "electron/**",
       "package.json"

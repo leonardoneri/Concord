@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Concord</title>
+  <style>
+    body {
+      margin: 0;
+      height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #313338;
+      color: #dbdee1;
+      font: 15px/1.5 "gg sans", "Segoe UI", system-ui, sans-serif;
+    }
+    .cartao { width: min(420px, calc(100vw - 32px)); background: #2b2d31; border-radius: 8px; padding: 32px; text-align: center; box-shadow: 0 8px 24px #0006; }
+    h1 { margin: 0 0 8px; font-size: 22px; color: #f2f3f5; }
+    p { margin: 0 0 20px; color: #b5bac1; }
+    small { display: block; margin-top: 14px; color: #80848e; font-size: 12px; }
+    button { background: #5865f2; color: #fff; border: 0; border-radius: 4px; padding: 11px 24px; font: inherit; font-weight: 600; cursor: pointer; }
+    button:hover { background: #4752c4; }
+  </style>
+</head>
+<body>
+  <div class="cartao">
+    <h1>Sem conexão com o Concord</h1>
+    <p>Confira sua internet. Se ela estiver ok, o servidor pode estar reiniciando: tente de novo em alguns segundos.</p>
+    <button id="tentar">Tentar de novo</button>
+    <small id="detalhe"></small>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const endereco = params.get('endereco');
+    document.getElementById('detalhe').textContent = params.get('erro') ?? '';
+    const tentar = () => location.replace(endereco);
+    document.getElementById('tentar').onclick = tentar;
+    // tenta sozinho a cada 15 s
+    setTimeout(tentar, 15000);
+  </script>
+</body>
+</html>

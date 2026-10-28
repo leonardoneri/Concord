@@ -122,17 +122,7 @@ function som(tipo) {
 }
 
 // ---------- desktop ----------
-if (appDesktop) {
-  $$('.trocar-servidor').forEach((b) => {
-    b.hidden = false;
-    b.onclick = () => appDesktop.trocarServidor();
-  });
-  appDesktop.aoTunel?.(({ estado: e, url }) => {
-    if (e === 'caiu') avisar('O link público caiu. Criando outro…');
-    else avisar(`Link novo criado: ${url} — mande pra galera (botão Convidar).`, 15000);
-  });
-  appDesktop.aoAtalho?.((acao) => (acao === 'mudo' ? alternarMudo() : alternarSurdo()));
-}
+appDesktop?.aoAtalho?.((acao) => (acao === 'mudo' ? alternarMudo() : alternarSurdo()));
 
 // Avisa o app desktop pra ligar/desligar os atalhos globais (Ctrl+Shift+M/D dentro do jogo)
 function atalhosGlobais(ligar) {
@@ -144,17 +134,11 @@ function atalhosGlobais(ligar) {
 // ---------- convite ----------
 const ehLocal = (host) => ['localhost', '127.0.0.1'].includes(host);
 
-// Endereço que os amigos conseguem abrir (no app desktop hospedando, é o link do túnel)
-async function enderecoPublico() {
-  const info = appDesktop ? await appDesktop.info() : null;
-  return info?.link ?? (ehLocal(location.hostname) ? info?.enderecos?.[0] ?? location.origin : location.origin);
-}
-
-async function abrirConvite() {
+function abrirConvite() {
   fecharPopovers();
   const { nome, convite } = estado.servidor;
   if (!convite) return;
-  const base = await enderecoPublico();
+  const base = location.origin;
   $('#convite-titulo').textContent = `Convidar amigos pra ${nome}`;
   $('#convite-link').value = `${base}/?convite=${convite}`;
   $('#convite-codigo').textContent = convite;
@@ -395,27 +379,50 @@ $('#form-entrar-servidor').addEventListener('submit', (e) => {
   entrarComConvite(convite);
 });
 
-// menu do nome do servidor
+// Menu de um servidor: no nome dele (topo) ou com clique direito no ícone (barra da esquerda)
+let menuServidorDe = null; // id do servidor do menu aberto
+function abrirMenuServidor(srv, { x, y, largura = 200 }) {
+  const menu = $('#menu-servidor');
+  fecharPopovers();
+  menuServidorDe = srv.id;
+  const aberto = srv.id === estado.servidor.id;
+  // admin só dá pra saber no servidor aberto; nos outros, só o dono tem certeza
+  $('#ms-config').hidden = aberto ? !souAdmin() : srv.dono !== estado.eu?.conta;
+  $('#ms-sair').hidden = srv.dono === estado.eu?.conta; // o dono não sai: apaga nas configurações
+  menu.hidden = false;
+  menu.style.width = `${largura}px`;
+  const { height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(x, innerWidth - largura - 8)}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, innerHeight - height - 8))}px`;
+}
+
+// ações que precisam do servidor aberto: troca pra ele antes
+function noServidorDoMenu(acao) {
+  fecharPopovers();
+  const id = menuServidorDe;
+  if (id === estado.servidor.id) return acao();
+  abrirServidor(id);
+  const esperar = setInterval(() => {
+    if (estado.servidor.id !== id) return;
+    clearInterval(esperar);
+    acao();
+  }, 50);
+  setTimeout(() => clearInterval(esperar), 5000);
+}
+
 $('#btn-menu-servidor').onclick = (e) => {
   e.stopPropagation();
-  const menu = $('#menu-servidor');
-  if (!menu.hidden) return fecharPopovers();
-  fecharPopovers();
-  const dono = estado.servidor.dono === estado.eu?.conta;
-  $('#ms-sair').hidden = dono;
-  menu.hidden = false;
+  if (!$('#menu-servidor').hidden) return fecharPopovers();
   const r = e.currentTarget.getBoundingClientRect();
-  menu.style.left = `${r.left + 8}px`;
-  menu.style.top = `${r.bottom + 4}px`;
-  menu.style.width = `${Math.max(200, r.width - 16)}px`;
+  abrirMenuServidor(estado.servidor, { x: r.left + 8, y: r.bottom + 4, largura: Math.max(200, r.width - 16) });
 };
-$('#ms-convidar').onclick = abrirConvite;
-$('#ms-config').onclick = () => { fecharPopovers(); abrirModalServidor(); };
+$('#ms-convidar').onclick = () => noServidorDoMenu(abrirConvite);
+$('#ms-config').onclick = () => noServidorDoMenu(() => abrirModalServidor());
 $('#ms-sair').onclick = () => {
   fecharPopovers();
-  const { id, nome } = estado.servidor;
-  if (!confirm(`Sair de ${nome}? Pra voltar, vai precisar de um convite.`)) return;
-  socket.emit('servidor:sair', id, (res) => res?.erro && avisar(res.erro));
+  const srv = estado.servidores.find((x) => x.id === menuServidorDe);
+  if (!srv || !confirm(`Sair de ${srv.nome}? Pra voltar, vai precisar de um convite.`)) return;
+  socket.emit('servidor:sair', srv.id, (res) => res?.erro && avisar(res.erro));
 };
 
 const perfilDe = (nome) => estado.perfis.find((p) => p.nome === nome);
@@ -584,6 +591,11 @@ function renderRail() {
     pintarIconeServidor(ic, srv);
     item.append(el('span', 'pill'), ic);
     item.onclick = () => { if (srv.id !== estado.servidor.id) abrirServidor(srv.id); };
+    item.oncontextmenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      abrirMenuServidor(srv, { x: e.clientX, y: e.clientY });
+    };
     return item;
   }));
 }

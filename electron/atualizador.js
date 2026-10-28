@@ -6,7 +6,7 @@ import updater from 'electron-updater';
 const { autoUpdater } = updater;
 const INTERVALO = 4 * 60 * 60 * 1000; // procura de novo a cada 4 horas
 
-export function iniciarAtualizador({ janela, hospedando }) {
+export function iniciarAtualizador({ janela }) {
   if (!app.isPackaged) return;
 
   autoUpdater.autoDownload = true;
@@ -28,9 +28,7 @@ export function iniciarAtualizador({ janela, hospedando }) {
       type: 'info',
       title: 'Atualização disponível',
       message: `A versão ${version} do Concord está pronta.`,
-      detail: hospedando()
-        ? 'Você está hospedando: a galera cai por alguns segundos e o link de convite muda. Se preferir, clique em "Depois" e ela instala quando você fechar o app.'
-        : 'O app reinicia rapidinho. Se preferir, clique em "Depois" e ela instala quando você fechar o app.',
+      detail: 'O app reinicia rapidinho. Se preferir, clique em "Depois" e ela instala quando você fechar o app.',
       buttons: ['Atualizar agora', 'Depois'],
       defaultId: 0,
       cancelId: 1,
