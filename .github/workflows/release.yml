@@ -12,6 +12,9 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,6 +22,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+
+      # O electron-builder sobe os arquivos em paralelo e, se o release não existe, cada upload cria
+      # o seu (fica um release com o .exe e outro sem). Então criamos um só, como rascunho, antes.
+      - name: Cria o release (rascunho)
+        shell: bash
+        run: |
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate -q ".[] | select(.tag_name == \"$TAG\") | .id"); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          gh release create "$TAG" --draft --title "${TAG#v}" --notes "" --verify-tag
+
       - run: npx electron-builder --win --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publica o release
+        shell: bash
+        run: gh release edit "$TAG" --draft=false --latest
