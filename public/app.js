@@ -158,7 +158,7 @@ function som(tipo) {
 
 // ---------- atalhos (mudo, surdo, apertar pra falar) ----------
 // modo 'voz' = microfone aberto; 'ptt' = só transmite enquanto segura a tecla
-const atalhos = { modo: 'voz', ptt: null, mudo: 'Ctrl+Shift+M', surdo: 'Ctrl+Shift+D', ...lerStorage('atalhos', {}) };
+const atalhos = { modo: 'voz', ptt: null, mudo: 'Ctrl+Shift+M', surdo: 'Ctrl+Shift+D', clipes: false, clipe: 'Ctrl+Alt+C', ...lerStorage('atalhos', {}) };
 let pttGlobal = false; // o app desktop vê a tecla mesmo com o jogo em foco
 let pttApertado = false;
 let pttSoltar = null;
@@ -196,7 +196,7 @@ function combinacao(e) {
   return [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', tecla].filter(Boolean).join('+');
 }
 
-appDesktop?.aoAtalho?.((acao) => (acao === 'mudo' ? alternarMudo() : acao === 'surdo' ? alternarSurdo() : null));
+appDesktop?.aoAtalho?.((acao) => (acao === 'mudo' ? alternarMudo() : acao === 'surdo' ? alternarSurdo() : acao === 'clipe' ? salvarClipe() : null));
 appDesktop?.aoPtt?.(apertarPtt);
 
 // Sem o hook do app desktop: a tecla só vale com o Concord em foco
@@ -261,16 +261,114 @@ $('#btn-atualizar').onclick = () => {
   else location.reload();
 };
 
+// ---------- clipes: grava tela + som durante a chamada; o atalho salva os últimos ~30 s no chat ----------
+// MediaRecorder não deixa cortar o começo do vídeo, então revezamos gravadores: um novo a cada
+// CLIPE_PASSO s, cada um vive até CLIPE_S + CLIPE_PASSO s. Sempre tem um com 30–45 s gravados.
+let CLIPE_S = 30;
+let CLIPE_PASSO = 15;
+const clipe = { tela: null, stream: null, ctx: null, gravadores: [], timer: null, iniciando: false, enviando: false };
+const clipesDisponiveis = () => !!appDesktop?.clipeFonte && !!window.MediaRecorder;
+const tipoClipe = () => ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find((t) => MediaRecorder.isTypeSupported(t));
+
+async function iniciarClipes() {
+  if (!atalhos.clipes || !clipesDisponiveis() || !estado.voz || clipe.stream || clipe.iniciando) return;
+  clipe.iniciando = true;
+  try {
+    const fonte = await appDesktop.clipeFonte();
+    if (!fonte) throw new Error('sem tela');
+    // tela principal + som do PC (jogo e a voz da galera); "desktop" não abre o seletor de tela
+    const tela = await navigator.mediaDevices.getUserMedia({
+      audio: { mandatory: { chromeMediaSource: 'desktop' } },
+      video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: fonte, maxWidth: 1280, maxHeight: 720, maxFrameRate: 30 } },
+    });
+    if (!estado.voz || !atalhos.clipes) return tela.getTracks().forEach((t) => t.stop());
+    // junta o som do PC com o meu microfone (respeita o mudo: a trilha desligada fica em silêncio)
+    const ctx = new AudioContext();
+    const mix = ctx.createMediaStreamDestination();
+    for (const s of [tela, estado.mic]) {
+      if (s?.getAudioTracks().length) ctx.createMediaStreamSource(new MediaStream(s.getAudioTracks())).connect(mix);
+    }
+    Object.assign(clipe, { tela, ctx, stream: new MediaStream([...tela.getVideoTracks(), ...mix.stream.getAudioTracks()]) });
+    novoGravador();
+    clipe.timer = setInterval(novoGravador, CLIPE_PASSO * 1000);
+  } catch (e) {
+    console.warn('Clipes', e);
+    avisar('Não deu pra começar a gravar os clipes (a captura da tela falhou).', 5000);
+  } finally {
+    clipe.iniciando = false;
+  }
+}
+
+function novoGravador() {
+  if (!clipe.stream) return;
+  // descarta quem já passou do tamanho máximo do clipe
+  const limite = (CLIPE_S + CLIPE_PASSO) * 1000 - 500;
+  for (const g of clipe.gravadores.filter((x) => Date.now() - x.inicio > limite)) descartarGravador(g);
+  const r = new MediaRecorder(clipe.stream, { mimeType: tipoClipe(), videoBitsPerSecond: 3_000_000, audioBitsPerSecond: 128_000 });
+  const g = { r, partes: [], inicio: Date.now() };
+  r.ondataavailable = (e) => e.data.size && g.partes.push(e.data);
+  r.start(1000);
+  clipe.gravadores.push(g);
+}
+
+function descartarGravador(g) {
+  clipe.gravadores = clipe.gravadores.filter((x) => x !== g);
+  g.r.ondataavailable = null;
+  if (g.r.state !== 'inactive') g.r.stop();
+  g.partes = [];
+}
+
+function pararClipes() {
+  clearInterval(clipe.timer);
+  [...clipe.gravadores].forEach(descartarGravador);
+  clipe.tela?.getTracks().forEach((t) => t.stop());
+  clipe.ctx?.close().catch(() => {});
+  Object.assign(clipe, { tela: null, stream: null, ctx: null, timer: null });
+}
+
+async function salvarClipe() {
+  if (!clipe.stream) {
+    return avisar(atalhos.clipes ? 'Os clipes só gravam durante uma chamada.' : 'Ligue os clipes em Configurações → Atalhos.', 4000);
+  }
+  if (clipe.enviando) return avisar('Ainda enviando o clipe anterior…', 3000);
+  const canal = estado.canalTexto;
+  if (canal == null) return avisar('Abra um canal de texto pra mandar o clipe.', 4000);
+  // o mais antigo tem os últimos 30–45 s; os outros continuam gravando
+  const g = clipe.gravadores.shift();
+  if (!g) return;
+  if (clipe.gravadores.length === 0) novoGravador();
+  som('entrar');
+  clipe.enviando = true;
+  try {
+    const blob = await new Promise((ok) => {
+      g.r.onstop = () => ok(new Blob(g.partes, { type: 'video/webm' }));
+      g.r.stop();
+    });
+    const segundos = Math.round((Date.now() - g.inicio) / 1000);
+    if (blob.size > 25 * 1024 * 1024) return avisar('O clipe ficou grande demais pra enviar (máx. 25 MB).', 5000);
+    const d = new Date();
+    const nome = `clipe-${d.toLocaleDateString('pt-BR').replaceAll('/', '-')}-${String(d.getHours()).padStart(2, '0')}h${String(d.getMinutes()).padStart(2, '0')}.webm`;
+    avisar(`🎬 Clipe de ${segundos} s salvo, enviando…`, 3000);
+    const dados = await blob.arrayBuffer();
+    const r = await new Promise((ok) => socket.timeout(120_000).emit('arquivo', { canal, nome, dados }, (err, res) => ok(err ? { erro: 'O envio do clipe demorou demais.' } : res)));
+    if (r?.erro) return avisar(r.erro, 5000);
+    avisar(`🎬 Clipe enviado em ${canalPorId(canal) ? `#${canalPorId(canal).nome}` : 'a conversa'}.`, 4000);
+  } finally {
+    clipe.enviando = false;
+  }
+}
+
 // Avisa o app desktop pra ligar/desligar os atalhos globais (funcionam dentro do jogo)
 function atalhosGlobais(ligar) {
   if (!appDesktop?.atalhos) return;
   const ptt = atalhos.modo === 'ptt' ? atalhos.ptt?.code ?? null : null;
-  appDesktop.atalhos({ ligar, mudo: atalhos.mudo, surdo: atalhos.surdo, ptt }).then((res) => {
+  const clipe = atalhos.clipes && clipesDisponiveis() ? atalhos.clipe : '';
+  appDesktop.atalhos({ ligar, mudo: atalhos.mudo, surdo: atalhos.surdo, clipe, ptt }).then((res) => {
     // a versão antiga do app responde só true/false
     const ok = typeof res === 'object' ? res?.ok : res;
     pttGlobal = typeof res === 'object' && !!res?.ptt;
     if (!ligar) return;
-    if (ok === false) avisar(`Outro programa já usa ${[atalhos.mudo, atalhos.surdo].filter(Boolean).join(' ou ')}: esse atalho só vai funcionar com o app em foco.`);
+    if (ok === false) avisar(`Outro programa já usa ${[atalhos.mudo, atalhos.surdo, clipe].filter(Boolean).join(' ou ')}: algum desses atalhos não vai funcionar.`);
     if (ptt && !pttGlobal) avisar('Nesta versão do app, o apertar pra falar só funciona com o Concord em foco. Atualize o app pra funcionar dentro do jogo.', 8000);
   });
 }
@@ -1382,6 +1480,11 @@ function previewArquivo(url) {
     v.src = url;
     v.controls = true;
     v.preload = 'metadata';
+    v.addEventListener('loadedmetadata', () => {
+      if (v.duration !== Infinity) return;
+      v.currentTime = 1e9;
+      v.addEventListener('timeupdate', () => (v.currentTime = 0), { once: true });
+    }, { once: true });
     const caixa = el('div', 'arquivo-midia');
     caixa.append(v, cartaoArquivo(url, nome));
     return caixa;
@@ -2197,6 +2300,7 @@ async function entrarVoz(canal) {
   });
   enviarEstado();
   atalhosGlobais(true);
+  iniciarClipes();
   som('entrar');
   render();
 }
@@ -2225,6 +2329,7 @@ function sairVoz(avisarServidor = true) {
   if (estado.view === 'voz') estado.view = 'texto';
   if (avisarServidor) socket.emit('voz:sair');
   atalhosGlobais(false);
+  pararClipes();
   render();
 }
 
@@ -3011,6 +3116,9 @@ async function abrirConfig(aba = 'conta') {
 // ---------- atalhos nas configurações ----------
 function renderAtalhos() {
   $('#cfg-modo').value = atalhos.modo;
+  $('#clipes-cfg').hidden = !clipesDisponiveis();
+  $('#clipes-indisponivel').hidden = clipesDisponiveis();
+  $('#cfg-clipes').checked = !!atalhos.clipes;
   $('#linha-ptt').hidden = atalhos.modo !== 'ptt';
   $$('[data-atalho]').forEach((b) => {
     const chave = b.dataset.atalho;
@@ -3026,6 +3134,17 @@ function salvarAtalhos() {
   aplicarMudo();
   if (estado.voz) atalhosGlobais(true);
 }
+$('#cfg-clipes').onchange = (e) => {
+  atalhos.clipes = e.target.checked;
+  salvarStorage('atalhos', atalhos);
+  if (atalhos.clipes) {
+    iniciarClipes();
+    if (!estado.voz) avisar('Os clipes começam a gravar quando você entrar numa chamada.', 4000);
+  } else {
+    pararClipes();
+  }
+  if (estado.voz) atalhosGlobais(true);
+};
 $('#cfg-modo').onchange = (e) => {
   atalhos.modo = e.target.value;
   if (atalhos.modo === 'ptt' && !atalhos.ptt) capturando = 'ptt';

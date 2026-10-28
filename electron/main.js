@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, desktopCapturer, globalShortcut, ipcMain, nativeImage, session, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, desktopCapturer, globalShortcut, ipcMain, nativeImage, screen, session, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -232,20 +232,27 @@ function configurarPtt(code) {
 let jogos = { atual: () => null };
 ipcMain.handle('desktop:jogo', () => jogos.atual());
 ipcMain.handle('desktop:mostrar', () => mostrarJanela());
+// Clipes: id da tela principal, pra página gravar sem abrir o seletor de tela
+ipcMain.handle('desktop:clipe-fonte', async (e) => {
+  if (e.sender !== janela?.webContents) return null;
+  const telas = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+  const principal = String(screen.getPrimaryDisplay().id);
+  return (telas.find((t) => t.display_id === principal) ?? telas[0])?.id ?? null;
+});
 
 // Atalhos que funcionam mesmo com o jogo em foco (só enquanto está numa chamada)
 const ATALHOS_PADRAO = { mudo: 'Ctrl+Shift+M', surdo: 'Ctrl+Shift+D' };
 ipcMain.handle('desktop:atalhos', (e, cfg) => {
   if (e.sender !== janela?.webContents) return false;
   // a página antiga manda só true/false
-  const { ligar, mudo, surdo, ptt: teclaPtt } = cfg && typeof cfg === 'object' ? cfg : { ligar: !!cfg, ...ATALHOS_PADRAO };
+  const { ligar, mudo, surdo, clipe, ptt: teclaPtt } = cfg && typeof cfg === 'object' ? cfg : { ligar: !!cfg, ...ATALHOS_PADRAO };
   globalShortcut.unregisterAll();
   if (!ligar) {
     configurarPtt(null);
     return { ok: true, ptt: false };
   }
   let ok = true;
-  for (const [atalho, acao] of [[mudo, 'mudo'], [surdo, 'surdo']]) {
+  for (const [atalho, acao] of [[mudo, 'mudo'], [surdo, 'surdo'], [clipe, 'clipe']]) {
     if (!atalho) continue;
     try {
       ok = globalShortcut.register(atalho, () => janela?.webContents.send('desktop:atalho', acao)) && ok;

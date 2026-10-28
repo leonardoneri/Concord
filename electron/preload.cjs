@@ -14,4 +14,6 @@ contextBridge.exposeInMainWorld('desktop', {
   aoJogo: (cb) => ipcRenderer.on('desktop:jogo', (_e, jogo) => cb(jogo)),
   // traz a janela de volta da bandeja (ex.: clicou numa notificação)
   mostrar: () => ipcRenderer.invoke('desktop:mostrar'),
+  // clipes: id da tela principal pra gravar (getUserMedia com chromeMediaSource 'desktop')
+  clipeFonte: () => ipcRenderer.invoke('desktop:clipe-fonte'),
 });
