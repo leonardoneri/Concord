@@ -167,8 +167,23 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('um som por vez', !!(await emit(leo, 'som:tocar', 'buzina')).erro);
   ok('só quem enviou (ou admin) apaga', !!(await emit(ana, 'som:apagar', sons[0].id)).erro);
   ok('quem enviou apaga', !(await emit(leo, 'som:apagar', sons[0].id)).erro && (await emit(leo, 'sons:lista', srv1)).sons.length === 0);
+  // assistir junto
+  ok('link inválido não entra', !!(await emit(leo, 'assistir:iniciar', 'x<script>')).erro);
+  const comecou = proximo(ana, 'assistir');
+  ok('coloca vídeo', !(await emit(leo, 'assistir:iniciar', 'M7lc1UVf-VE')).erro);
+  ok('a sala recebe o vídeo', (await comecou)?.video === 'M7lc1UVf-VE');
+  const pausou = proximo(ana, 'assistir');
+  await emit(leo, 'assistir:controle', { tocando: false, posicao: 42 });
+  const p = await pausou;
+  ok('pausa e posição vão pra sala', p?.tocando === false && p.posicao === 42);
+  ok('posição inválida é recusada', !!(await emit(leo, 'assistir:controle', { tocando: true, posicao: -5 })).erro);
+  ok('quem não está na sala não controla', !!(await emit(bia, 'assistir:controle', { tocando: true, posicao: 1 })).erro);
   leo.emit('voz:sair');
   ana.emit('voz:sair');
+  await espera(200);
+  await emit(leo, 'voz:entrar', voz);
+  ok('sala vazia: o vídeo para', (await emit(leo, 'assistir:estado')) === null);
+  leo.emit('voz:sair');
   await espera(200);
 }
 

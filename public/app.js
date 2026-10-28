@@ -35,6 +35,7 @@ const ICONES = {
   desligar: '<path fill="currentColor" d="M3 15.5c5-5 13-5 18 0l-2.5 2.5-3.2-1.6v-2.8a10 10 0 0 0-6.6 0v2.8L5.5 18z"/>',
   config: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   jogo: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><rect x="2" y="6" width="20" height="12" rx="4"/>',
+  tv: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/>',
   sons: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
   volume: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>',
   lixo: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
@@ -770,6 +771,12 @@ function restaurarVoz(voz) {
   }
   for (const id of voz.outros) if (!peers.has(id)) criarPeer(id);
   if ($('#toast').textContent.startsWith('Reconectando')) $('#toast').hidden = true;
+  // o servidor reiniciou e esqueceu o vídeo: quem estava assistindo devolve ele, no ponto em que estava
+  const tinha = estado.assistir && { ...estado.assistir, posicao: posicaoEsperada() };
+  socket.emit('assistir:estado', null, (a) => {
+    if (a || !tinha) return aplicarAssistir(a);
+    socket.emit('assistir:iniciar', tinha.video, () => socket.emit('assistir:controle', { tocando: tinha.tocando, posicao: tinha.posicao }));
+  });
 }
 
 let membrosVoz = new Set();
@@ -1932,6 +1939,7 @@ async function entrarVoz(canal) {
       return avisar('Não deu pra entrar nessa sala.');
     }
     for (const id of ids) if (!peers.has(id)) criarPeer(id);
+    socket.emit('assistir:estado', null, aplicarAssistir); // já tem vídeo passando nessa sala?
   });
   enviarEstado();
   atalhosGlobais(true);
@@ -1954,6 +1962,8 @@ function sairVoz(avisarServidor = true) {
   sumidos.clear();
   estado.voz = null;
   estado.vozInfo = null;
+  estado.assistir = null;
+  fecharPlayer();
   miniaturas(false);
   membrosVoz = new Set();
   if (estado.view === 'voz') estado.view = 'texto';
@@ -2313,10 +2323,12 @@ function renderGrid() {
     }
   }
 
-  const destaque = escolherDestaque(desejados);
-  grid.classList.toggle('foco', !!destaque);
-  grid.classList.toggle('sem-tira', !!destaque && !tiraVisivel);
-  $('#btn-tira').hidden = !destaque;
+  const assistindo = !!(estado.voz && estado.assistir);
+  const destaque = assistindo ? null : escolherDestaque(desejados);
+  grid.classList.toggle('foco', !!destaque || assistindo);
+  grid.classList.toggle('assistindo', assistindo);
+  grid.classList.toggle('sem-tira', (!!destaque || assistindo) && !tiraVisivel);
+  $('#btn-tira').hidden = !destaque && !assistindo;
   $('#btn-tira').title = tiraVisivel ? 'Esconder participantes' : 'Mostrar participantes';
   $('#btn-tira').classList.toggle('desligado', !tiraVisivel);
 
@@ -3212,6 +3224,209 @@ $('#form-som').onsubmit = async (e) => {
     if (r?.erro) return avisar(r.erro);
     $('#form-som').hidden = true;
     $('#btn-novo-som').hidden = false;
+  });
+};
+
+// ---------- assistir junto (YouTube sincronizado) ----------
+// O servidor guarda { video, por, tocando, posicao }; cada um toca o vídeo no próprio PC
+// e corrige quando fica fora do tempo dos outros.
+let player = null;
+let playerVideo = null;
+let ytPronto = null;
+let recebidoEm = 0; // quando chegou o estado (pra calcular onde o vídeo deveria estar agora)
+let aplicandoAte = 0; // mudanças feitas pelo próprio app (não são cliques da pessoa)
+let surdoAssistir = null;
+
+function idDoYoutube(texto) {
+  texto = String(texto ?? '').trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(texto)) return texto;
+  try {
+    const u = new URL(texto);
+    const host = u.hostname.replace(/^(www|m|music)\./, '');
+    if (host === 'youtu.be') return u.pathname.slice(1, 12);
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      if (u.searchParams.get('v')) return u.searchParams.get('v').slice(0, 11);
+      const m = u.pathname.match(/^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{11})/);
+      if (m) return m[1];
+    }
+  } catch {}
+  return null;
+}
+
+function carregarYoutube() {
+  ytPronto ??= new Promise((resolve, reject) => {
+    if (window.YT?.Player) return resolve();
+    window.onYouTubeIframeAPIReady = resolve;
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    s.onerror = () => {
+      ytPronto = null;
+      reject(new Error('sem acesso ao YouTube'));
+    };
+    document.head.append(s);
+  });
+  return ytPronto;
+}
+
+// onde o vídeo deveria estar agora, pelo estado do servidor
+function posicaoEsperada() {
+  const a = estado.assistir;
+  if (!a) return 0;
+  return a.tocando ? a.posicao + (Date.now() - recebidoEm) / 1000 : a.posicao;
+}
+
+function sincronizarPlayer() {
+  const a = estado.assistir;
+  if (!player?.getPlayerState || !a || playerVideo !== a.video) return;
+  const st = player.getPlayerState();
+  const atual = player.getCurrentTime?.() ?? 0;
+  const esperada = posicaoEsperada();
+  if (Math.abs(atual - esperada) > 2) {
+    aplicandoAte = Date.now() + 1500;
+    player.seekTo(esperada, true);
+  }
+  if (a.tocando && st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.BUFFERING) {
+    aplicandoAte = Date.now() + 1500;
+    player.playVideo();
+  } else if (!a.tocando && st === YT.PlayerState.PLAYING) {
+    aplicandoAte = Date.now() + 1500;
+    player.pauseVideo();
+  }
+  // no surdo, o vídeo também fica mudo
+  if (surdoAssistir !== estado.surdo) {
+    surdoAssistir = estado.surdo;
+    if (estado.surdo) player.mute();
+    else player.unMute();
+  }
+}
+
+// a pessoa deu play/pause/pulou no player: avisa a sala (se for diferente do que todo mundo já está vendo)
+function mudouPlayer(e) {
+  if (Date.now() < aplicandoAte || !estado.assistir) return;
+  const S = YT.PlayerState;
+  if (![S.PLAYING, S.PAUSED, S.ENDED].includes(e.data)) return;
+  const tocando = e.data === S.PLAYING;
+  const posicao = player.getCurrentTime();
+  if (tocando === estado.assistir.tocando && Math.abs(posicao - posicaoEsperada()) < 1.5) return;
+  estado.assistir = { ...estado.assistir, tocando, posicao };
+  recebidoEm = Date.now();
+  socket.emit('assistir:controle', { tocando, posicao });
+}
+
+function fecharPlayer() {
+  player?.destroy?.();
+  player = null;
+  playerVideo = null;
+  surdoAssistir = null;
+  $('#assistir').hidden = true;
+  // o destroy troca a div do player por nada: recria pro próximo vídeo
+  if (!$('#player-assistir')) $('.video-assistir').append(Object.assign(document.createElement('div'), { id: 'player-assistir' }));
+}
+
+async function aplicarAssistir(a) {
+  estado.assistir = estado.voz ? a : null;
+  recebidoEm = Date.now();
+  if (!estado.assistir) {
+    fecharPlayer();
+    renderGrid();
+    return;
+  }
+  $('#assistir').hidden = false;
+  $('#info-assistir').textContent = `${a.por} colocou um vídeo`;
+  renderGrid();
+  if (playerVideo === a.video && player) return sincronizarPlayer();
+  try {
+    await carregarYoutube();
+  } catch {
+    return avisar('Não consegui carregar o YouTube aqui (sem internet ou bloqueado).');
+  }
+  if (estado.assistir?.video !== a.video) return;
+  playerVideo = a.video;
+  if (player) {
+    aplicandoAte = Date.now() + 2000;
+    player.loadVideoById({ videoId: a.video, startSeconds: posicaoEsperada() });
+    return;
+  }
+  player = new YT.Player('player-assistir', {
+    videoId: a.video,
+    playerVars: { autoplay: 1, start: Math.floor(posicaoEsperada()), rel: 0, playsinline: 1, origin: location.origin },
+    events: {
+      onReady: () => {
+        aplicandoAte = Date.now() + 2000;
+        sincronizarPlayer();
+        const titulo = player.getVideoData?.().title;
+        if (titulo && estado.assistir) $('#info-assistir').textContent = `${estado.assistir.por} colocou: ${titulo}`;
+      },
+      onStateChange: (e) => {
+        mudouPlayer(e);
+        const titulo = player?.getVideoData?.().title;
+        if (titulo && estado.assistir) $('#info-assistir').textContent = `${estado.assistir.por} colocou: ${titulo}`;
+      },
+      onError: (e) => {
+        const msg = [101, 150, 153].includes(e.data)
+          ? 'Esse vídeo não deixa ser assistido fora do YouTube. Tenta outro.'
+          : 'O YouTube não conseguiu tocar esse vídeo.';
+        avisar(msg);
+      },
+    },
+  });
+}
+socket.on('assistir', aplicarAssistir);
+
+// Pular pela barra do YouTube nem sempre gera evento: percebe o pulo pelo tempo do vídeo
+// (andou bem mais ou voltou, comparado com o relógio) e avisa a sala. Depois confere se
+// ninguém ficou pra trás (internet travou, PC lento…).
+let ultimoT = null;
+let ultimoRelogio = 0;
+setInterval(() => {
+  const a = estado.assistir;
+  if (!player?.getPlayerState || !a || playerVideo !== a.video) {
+    ultimoT = null;
+    return;
+  }
+  const st = player.getPlayerState();
+  // carregando (muitas vezes porque a pessoa acabou de pular): espera, senão puxaria o vídeo de volta
+  if (st === YT.PlayerState.BUFFERING) return;
+  const agora = Date.now();
+  const t = player.getCurrentTime();
+  if (ultimoT != null && agora > aplicandoAte) {
+    const andou = t - ultimoT;
+    const passou = (agora - ultimoRelogio) / 1000;
+    const pulou = st === YT.PlayerState.PLAYING ? andou - passou > 2 || andou < -1 : Math.abs(andou) > 1;
+    if (pulou && Math.abs(t - posicaoEsperada()) > 1.5) {
+      estado.assistir = { ...a, posicao: t };
+      recebidoEm = agora;
+      socket.emit('assistir:controle', { tocando: a.tocando, posicao: t });
+    }
+  }
+  ultimoT = t;
+  ultimoRelogio = agora;
+  sincronizarPlayer();
+}, 1000);
+
+function abrirAssistir(e) {
+  e?.stopPropagation();
+  const painel = $('#painel-assistir');
+  if (!painel.hidden) return fecharPopovers();
+  fecharPopovers();
+  painel.hidden = false;
+  const r = $('#btn-assistir').getBoundingClientRect();
+  const largura = painel.getBoundingClientRect().width;
+  painel.style.left = `${Math.max(8, Math.min(innerWidth - largura - 8, r.left + r.width / 2 - largura / 2))}px`;
+  painel.style.top = `${Math.max(8, r.top - painel.getBoundingClientRect().height - 10)}px`;
+  $('#link-assistir').value = '';
+  $('#link-assistir').focus();
+}
+$('#btn-assistir').onclick = abrirAssistir;
+$('#btn-trocar-video').onclick = abrirAssistir;
+$('#btn-parar-assistir').onclick = () => socket.emit('assistir:parar');
+$('#painel-assistir').onsubmit = (e) => {
+  e.preventDefault();
+  const id = idDoYoutube($('#link-assistir').value);
+  if (!id) return avisar('Esse link não parece ser de um vídeo do YouTube.');
+  socket.emit('assistir:iniciar', id, (r) => {
+    if (r?.erro) return avisar(r.erro);
+    fecharPopovers();
   });
 };
 

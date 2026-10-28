@@ -135,6 +135,14 @@
 
         <section id="view-voz" hidden>
           <div id="grid">
+            <div id="assistir" hidden>
+              <div class="video-assistir"><div id="player-assistir"></div></div>
+              <div class="barra-assistir">
+                <span id="info-assistir"></span>
+                <button type="button" class="btn-secundario" id="btn-trocar-video">Trocar vídeo</button>
+                <button type="button" class="btn-secundario" id="btn-parar-assistir">Parar</button>
+              </div>
+            </div>
             <div id="palco"></div>
             <div id="tira"></div>
           </div>
@@ -143,6 +151,7 @@
             <button class="btn-redondo btn-tela" title="Compartilhar tela" data-icone="tela"></button>
             <button class="btn-redondo btn-mudo" title="Silenciar"></button>
             <button class="btn-redondo" id="btn-tira" title="Esconder participantes" data-icone="membros" hidden></button>
+            <button class="btn-redondo" id="btn-assistir" title="Assistir junto: um vídeo do YouTube sincronizado pra todo mundo da chamada" data-icone="tv"></button>
             <button class="btn-redondo" id="btn-sons" title="Soundboard: tocar um som pra todo mundo da chamada" data-icone="sons"></button>
             <button class="btn-redondo perigo btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
           </div>
@@ -343,6 +352,12 @@
     <button type="button" class="menu-botao" id="ms-editar-perfil">Editar perfil e configurações</button>
   </div>
   <div id="menu-pessoa" class="popover" hidden></div>
+  <form id="painel-assistir" class="popover" hidden>
+    <h3>Assistir junto</h3>
+    <p>Cole o link de um vídeo do YouTube. Ele toca sincronizado pra todo mundo da chamada, e qualquer um pode pausar ou adiantar.</p>
+    <input id="link-assistir" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
+    <button class="btn-primario">Assistir</button>
+  </form>
   <div id="painel-sons" class="popover" hidden>
     <header>
       <h3>Soundboard</h3>

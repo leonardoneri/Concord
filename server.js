@@ -481,6 +481,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   // a conexão cai e volta (ex.: servidor reiniciando), então a chamada WebRTC não precisa recomeçar
   const usuarios = new Map();
   const previas = new Map(); // id do usuário -> miniatura da tela que a pessoa está transmitindo
+  // "Assistir junto": canal de voz -> { video, por, tocando, posicao, em } (posicao em segundos no instante `em`)
+  const assistindo = new Map();
   const sala = (srv) => `s:${srv}`;
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
@@ -536,6 +538,24 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   }
 
   // Tira da call quem estava num canal de voz que deixou de existir / que a pessoa não pode mais ver
+  // Estado do "assistir junto" com a posição de agora (quem recebe não precisa acertar relógio)
+  function assistirPublico(canal) {
+    const a = assistindo.get(canal);
+    if (!a) return null;
+    const posicao = a.tocando ? a.posicao + (Date.now() - a.em) / 1000 : a.posicao;
+    return { video: a.video, por: a.por, tocando: a.tocando, posicao };
+  }
+  function emitirAssistir(canal) {
+    const dados = assistirPublico(canal);
+    for (const o of usuarios.values()) if (o.voz === canal) io.to(o.socket).emit('assistir', dados);
+  }
+  // sala vazia: para o vídeo
+  function limparAssistir() {
+    for (const canal of assistindo.keys()) {
+      if (![...usuarios.values()].some((o) => o.voz === canal)) assistindo.delete(canal);
+    }
+  }
+
   function tirarDaVoz(filtro) {
     for (const o of usuarios.values()) {
       if (o.voz != null && filtro(o)) {
@@ -1079,6 +1099,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       previas.delete(u.id);
       const outros = [...usuarios.values()].filter((o) => o.voz === c.id && o.id !== u.id).map((o) => o.id);
       emitirPresenca();
+      limparAssistir(); // se trocou de sala, a antiga pode ter ficado vazia
       ack(outros);
     });
 
@@ -1142,7 +1163,31 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       Object.assign(u, { voz: null, mic: null, camera: null, tela: null });
       previas.delete(u.id);
       emitirPresenca();
+      limparAssistir();
     });
+
+    // ---------- assistir junto (YouTube sincronizado na sala) ----------
+    quando('assistir:iniciar', (u, video, ack) => {
+      if (u.voz == null) return ack({ erro: 'Entra numa sala de voz primeiro' });
+      if (typeof video !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(video)) return ack({ erro: 'Link do YouTube inválido' });
+      assistindo.set(u.voz, { video, por: u.nome, tocando: true, posicao: 0, em: Date.now() });
+      emitirAssistir(u.voz);
+      ack({});
+    });
+    quando('assistir:controle', (u, { tocando, posicao } = {}, ack) => {
+      const a = u.voz != null && assistindo.get(u.voz);
+      if (!a) return ack({ erro: 'Nada passando agora' });
+      posicao = Number(posicao);
+      if (!Number.isFinite(posicao) || posicao < 0 || posicao > 24 * 3600) return ack({ erro: 'Posição inválida' });
+      Object.assign(a, { tocando: !!tocando, posicao, em: Date.now() });
+      emitirAssistir(u.voz);
+      ack({});
+    });
+    quando('assistir:parar', (u, _, ack) => {
+      if (u.voz != null && assistindo.delete(u.voz)) emitirAssistir(u.voz);
+      ack({});
+    });
+    quando('assistir:estado', (u, _, ack) => ack(u.voz != null ? assistirPublico(u.voz) : null));
 
     quando('estado', (u, s = {}) => {
       u.mudo = !!s.mudo;
@@ -1173,6 +1218,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       usuarios.delete(socket.id);
       previas.delete(u.id);
       emitirPresenca();
+      // dá um tempo: pode ser só o servidor/conexão voltando (o vídeo continua pra quem reconectar)
+      setTimeout(limparAssistir, 90_000);
     });
   });
 
