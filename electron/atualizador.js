@@ -1,17 +1,23 @@
-// Atualização automática pelo GitHub Releases (só funciona na versão instalada, não na portátil).
-// Baixa em segundo plano e, quando termina, pergunta se quer reiniciar pra atualizar.
-import { app, dialog } from 'electron';
+// Atualização automática pelo GitHub Releases (só na versão instalada).
+// Baixa em segundo plano e, quando termina, o app mostra um botão verde (igual o Discord):
+// clicar reinicia já atualizado; sem clicar, instala quando fechar o app.
+import { app, ipcMain } from 'electron';
 import updater from 'electron-updater';
 
 const { autoUpdater } = updater;
 const INTERVALO = 4 * 60 * 60 * 1000; // procura de novo a cada 4 horas
 
 export function iniciarAtualizador({ janela }) {
+  // a página pergunta ao carregar (e depois de um F5), então o estado fica guardado aqui
+  let pronta = null; // { versao } quando a atualização já foi baixada
+  ipcMain.handle('desktop:atualizacao', () => pronta);
+  ipcMain.handle('desktop:atualizar', () => {
+    if (pronta) autoUpdater.quitAndInstall(true, true);
+  });
   if (!app.isPackaged) return;
 
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true; // se clicar "Depois", instala quando fechar o app
-  let perguntou = false;
+  autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('download-progress', ({ percent }) => janela()?.setProgressBar(percent / 100));
   autoUpdater.on('error', (err) => {
@@ -19,22 +25,10 @@ export function iniciarAtualizador({ janela }) {
     console.error('Erro ao atualizar', err);
   });
 
-  autoUpdater.on('update-downloaded', async ({ version }) => {
-    const j = janela();
-    j?.setProgressBar(-1);
-    if (perguntou) return;
-    perguntou = true;
-    const { response } = await dialog.showMessageBox(j, {
-      type: 'info',
-      title: 'Atualização disponível',
-      message: `A versão ${version} do Concord está pronta.`,
-      detail: 'O app reinicia rapidinho. Se preferir, clique em "Depois" e ela instala quando você fechar o app.',
-      buttons: ['Atualizar agora', 'Depois'],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (response === 0) autoUpdater.quitAndInstall(true, true);
+  autoUpdater.on('update-downloaded', ({ version }) => {
+    janela()?.setProgressBar(-1);
+    pronta = { versao: version };
+    janela()?.webContents.send('desktop:atualizacao', pronta);
   });
 
   const procurar = () => autoUpdater.checkForUpdates().catch((err) => console.error('Erro ao procurar atualização', err));

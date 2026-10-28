@@ -44,6 +44,7 @@ ICONES.lapis = '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4
 ICONES.lixo = '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>';
 ICONES.pino = '<path d="M12 17v5M9 3h6l-1 7 4 3v2H6v-2l4-3z"/>';
 ICONES.cima = '<path d="m18 15-6-6-6 6"/>';
+ICONES.baixar = '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>';
 ICONES.coroa = '<path fill="currentColor" stroke="none" d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/>';
 ICONES.micOff = ICONES.mic + CORTE;
 ICONES.foneOff = ICONES.fone + CORTE;
@@ -123,6 +124,20 @@ function som(tipo) {
 
 // ---------- desktop ----------
 appDesktop?.aoAtalho?.((acao) => (acao === 'mudo' ? alternarMudo() : alternarSurdo()));
+
+// Atualização do app já baixada: aparece o botão verde (igual o Discord); clicar reinicia atualizado
+function mostrarAtualizacao(info) {
+  if (!info) return;
+  const b = $('#btn-atualizar');
+  b.hidden = false;
+  b.title = `Atualização pronta (versão ${info.versao}): clique pra reiniciar e atualizar`;
+}
+appDesktop?.atualizacao?.().then(mostrarAtualizacao);
+appDesktop?.aoAtualizacao?.(mostrarAtualizacao);
+$('#btn-atualizar').onclick = () => {
+  if (estado.voz && !confirm('Você está numa chamada. Reiniciar agora pra atualizar? (Leva uns segundos.)')) return;
+  appDesktop?.atualizar();
+};
 
 // Avisa o app desktop pra ligar/desligar os atalhos globais (Ctrl+Shift+M/D dentro do jogo)
 function atalhosGlobais(ligar) {

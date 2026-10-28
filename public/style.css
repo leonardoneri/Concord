@@ -970,3 +970,8 @@ textarea {
 /* sem nenhum servidor: só a barra da esquerda e a tela de criar/entrar */
 #app.sem-servidor #sidebar > :not(.painel-usuario):not(#painel-voz),
 #app.sem-servidor main > * { visibility: hidden; }
+
+/* atualização do app pronta (só no app desktop) */
+#btn-atualizar { margin-top: auto; background: var(--verde); color: #fff; animation: pulsar 2s ease-in-out infinite; }
+#btn-atualizar:hover { border-radius: 16px; background: var(--verde); filter: brightness(1.1); animation: none; }
+@keyframes pulsar { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--verde) 25%, transparent); } }
