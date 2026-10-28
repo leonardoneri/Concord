@@ -55,6 +55,10 @@ const STATUS = ['online', 'ausente', 'ocupado', 'invisivel'];
 const EMOJI_RE = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3)(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}]|\u200D\p{Extended_Pictographic}\uFE0F?)*$/u;
 // Arquivos que o navegador mostra direto; o resto sempre baixa (nunca abre como página)
 const MAX_SOM = 1024 * 1024; // soundboard: sons curtos
+const MAX_EMOJI = 256 * 1024; // emoji do servidor (imagem pequena)
+const MAX_EMOJIS = 60; // por servidor
+const EMOJI_NOME_RE = /^[a-z0-9_]{2,32}$/;
+const EMOJI_CUSTOM_RE = /^:([a-z0-9_]{2,32}):$/;
 const DURA_EVENTO = 3 * 60 * 60 * 1000; // evento some da lista 3 h depois de começar
 const MAX_EVENTOS = 30; // eventos marcados ao mesmo tempo por servidor
 const MAX_SONS = 48; // por servidor
@@ -128,6 +132,41 @@ function criarLimitador() {
       erros.set(ip, e);
     },
   };
+}
+
+// ---------- GIFs: Tenor (TENOR_KEY) ou GIPHY (GIPHY_KEY), com cache curto pra economizar a cota ----------
+const chaveGif = () => ({ tenor: process.env.TENOR_KEY || '', giphy: process.env.GIPHY_KEY || '' });
+const cacheGifs = new Map(); // termo -> { em, gifs }
+async function buscarGifs(termo) {
+  const GIF_CHAVE = chaveGif();
+  const chave = `${GIF_CHAVE.tenor ? 't' : 'g'}:${termo.toLowerCase()}`;
+  const guardado = cacheGifs.get(chave);
+  if (guardado && Date.now() - guardado.em < 10 * 60e3) return guardado.gifs;
+  let gifs;
+  if (GIF_CHAVE.tenor) {
+    const q = new URLSearchParams({ key: GIF_CHAVE.tenor, client_key: 'concord', limit: '30', contentfilter: 'medium', locale: 'pt_BR', media_filter: 'gif,tinygif' });
+    if (termo) q.set('q', termo);
+    const r = await fetch(`https://tenor.googleapis.com/v2/${termo ? 'search' : 'featured'}?${q}`, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) throw new Error(`Tenor ${r.status}`);
+    gifs = (await r.json()).results.map((g) => ({
+      url: g.media_formats.gif?.url, previa: g.media_formats.tinygif?.url ?? g.media_formats.gif?.url,
+      largura: g.media_formats.tinygif?.dims?.[0], altura: g.media_formats.tinygif?.dims?.[1], titulo: g.content_description ?? '',
+    }));
+  } else {
+    const q = new URLSearchParams({ api_key: GIF_CHAVE.giphy, limit: '30', rating: 'pg-13', lang: 'pt' });
+    if (termo) q.set('q', termo);
+    const r = await fetch(`https://api.giphy.com/v1/gifs/${termo ? 'search' : 'trending'}?${q}`, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) throw new Error(`GIPHY ${r.status}`);
+    gifs = (await r.json()).data.map((g) => ({
+      url: g.images.downsized?.url ?? g.images.original?.url, previa: g.images.fixed_width?.url,
+      largura: Number(g.images.fixed_width?.width), altura: Number(g.images.fixed_width?.height), titulo: g.title ?? '',
+    }));
+  }
+  // só links https de imagem (é isso que vai pro chat)
+  gifs = gifs.filter((g) => /^https:\/\/[^\s<]+$/.test(g.url ?? '') && /^https:\/\/[^\s<]+$/.test(g.previa ?? ''));
+  cacheGifs.set(chave, { em: Date.now(), gifs });
+  if (cacheGifs.size > 300) cacheGifs.delete(cacheGifs.keys().next().value);
+  return gifs;
 }
 
 // Formato do som pela assinatura (mp3, ogg, wav, m4a, webm)
@@ -207,6 +246,15 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       admin INTEGER NOT NULL DEFAULT 0,
       entrou_em INTEGER NOT NULL,
       PRIMARY KEY (servidor, conta)
+    );
+    CREATE TABLE IF NOT EXISTS emojis (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      servidor INTEGER NOT NULL,
+      nome TEXT NOT NULL,
+      url TEXT NOT NULL,
+      conta INTEGER NOT NULL,
+      criado_em INTEGER NOT NULL,
+      UNIQUE (servidor, nome)
     );
     CREATE TABLE IF NOT EXISTS eventos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -322,6 +370,12 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     criarSom: db.prepare('INSERT INTO sons (servidor, nome, emoji, url, conta, criado_em) VALUES (?, ?, ?, ?, ?, ?)'),
     apagarSom: db.prepare('DELETE FROM sons WHERE id = ?'),
     apagarSonsDo: db.prepare('DELETE FROM sons WHERE servidor = ?'),
+    emojisDo: db.prepare('SELECT nome, url FROM emojis WHERE servidor = ? ORDER BY nome'),
+    emojiDo: db.prepare('SELECT * FROM emojis WHERE servidor = ? AND nome = ?'),
+    contarEmojis: db.prepare('SELECT COUNT(*) AS n FROM emojis WHERE servidor = ?'),
+    criarEmoji: db.prepare('INSERT INTO emojis (servidor, nome, url, conta, criado_em) VALUES (?, ?, ?, ?, ?)'),
+    apagarEmoji: db.prepare('DELETE FROM emojis WHERE id = ?'),
+    apagarEmojisDo: db.prepare('DELETE FROM emojis WHERE servidor = ?'),
     // eventos que ainda não acabaram (some 3 h depois de começar)
     eventosDo: db.prepare('SELECT * FROM eventos WHERE servidor = ? AND inicio > ? ORDER BY inicio'),
     evento: db.prepare('SELECT * FROM eventos WHERE id = ?'),
@@ -453,6 +507,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       convite: s.convite,
       canais: sql.canaisDo.all(id).map(({ id: cid, tipo, nome, topico }) => ({ id: cid, tipo, nome, topico })),
       eventos: sql.eventosDo.all(id, Date.now() - DURA_EVENTO).map(eventoPublico),
+      emojis: sql.emojisDo.all(id),
     };
   }
   function eventoPublico(e) {
@@ -833,6 +888,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       sql.apagarMembros.run(s.id);
       sql.apagarServidor.run(s.id);
       sql.apagarSonsDo.run(s.id);
+      sql.apagarEmojisDo.run(s.id);
       sql.apagarEventosDo.run(s.id);
       io.to(sala(s.id)).emit('servidor:removido', { id: s.id, nome: s.nome });
       io.in(sala(s.id)).socketsLeave(sala(s.id));
@@ -1144,7 +1200,9 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const { m, c } = mensagemDoMembro(id, u.conta);
       if (!m) return ack({ erro: 'Mensagem não encontrada' });
       emoji = String(emoji ?? '');
-      if (emoji.length > 32 || !EMOJI_RE.test(emoji)) return ack({ erro: 'Emoji inválido' });
+      const custom = emoji.match(EMOJI_CUSTOM_RE);
+      const valido = custom ? !!(c.servidor && sql.emojiDo.get(c.servidor, custom[1])) : emoji.length <= 32 && EMOJI_RE.test(emoji);
+      if (!valido) return ack({ erro: 'Emoji inválido' });
       if (sql.temReacao.get(m.id, u.conta, emoji)) {
         sql.desreagir.run(m.id, u.conta, emoji);
       } else {
@@ -1191,6 +1249,45 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       sql.apagarEvento.run(e.id);
       emitirServidor(e.servidor);
       ack({});
+    });
+
+    // ---------- emojis do servidor (admins sobem, todo mundo usa) ----------
+    quandoAdmin('emoji:enviar', async (u, { nome, dados } = {}, ack, srv) => {
+      nome = String(nome ?? '').toLowerCase().trim().replace(/[\s-]+/g, '_').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (!EMOJI_NOME_RE.test(nome)) return ack({ erro: 'Nome de 2 a 32 letras, números ou _ (ex.: leo_rindo)' });
+      if (sql.emojiDo.get(srv, nome)) return ack({ erro: `Já existe o :${nome}:` });
+      if (sql.contarEmojis.get(srv).n >= MAX_EMOJIS) return ack({ erro: `O servidor já tem ${MAX_EMOJIS} emojis` });
+      if (!Buffer.isBuffer(dados) || !dados.length) return ack({ erro: 'Imagem vazia' });
+      if (dados.length > MAX_EMOJI) return ack({ erro: 'Imagem grande demais pra emoji (máx. 256 KB)' });
+      if (!extensaoDaImagem(dados)) return ack({ erro: 'Use PNG, JPG, GIF ou WebP' });
+      const r = await salvarImagem(dados);
+      if (r.erro) return ack(r);
+      sql.criarEmoji.run(srv, nome, r.url, u.conta, Date.now());
+      emitirServidor(srv);
+      ack({ nome });
+    });
+    quandoAdmin('emoji:apagar', (u, nome, ack, srv) => {
+      const e = sql.emojiDo.get(srv, String(nome ?? ''));
+      if (!e) return ack({});
+      sql.apagarEmoji.run(e.id);
+      emitirServidor(srv);
+      ack({});
+    });
+
+    // ---------- GIFs (o servidor busca, pra chave da API não ir pros clientes) ----------
+    let ultimaBuscaGif = 0;
+    quando('gifs:buscar', async (u, termo, ack) => {
+      const GIF_CHAVE = chaveGif();
+      if (!GIF_CHAVE.tenor && !GIF_CHAVE.giphy) return ack({ erro: 'semChave' });
+      if (Date.now() - ultimaBuscaGif < 400) return ack({ erro: 'Calma' });
+      ultimaBuscaGif = Date.now();
+      termo = limparLinha(termo, 60);
+      try {
+        ack({ gifs: await buscarGifs(termo), fonte: GIF_CHAVE.tenor ? 'Tenor' : 'GIPHY' });
+      } catch (err) {
+        console.error('Busca de GIF', err.message);
+        ack({ erro: 'A busca de GIF não respondeu agora. Tenta de novo.' });
+      }
     });
 
     // ---------- enquetes ----------

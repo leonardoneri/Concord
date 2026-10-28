@@ -130,6 +130,8 @@
               <input type="file" id="input-arquivo" multiple hidden>
               <button type="button" class="mais" id="btn-enquete" title="Criar enquete" data-icone="enquete"></button>
               <input id="input-msg" maxlength="2000" autocomplete="off">
+              <button type="button" class="mais btn-gif" id="btn-gif" title="Mandar GIF">GIF</button>
+              <button type="button" class="mais" id="btn-emoji-msg" title="Emoji" data-icone="emoji"></button>
             </div>
             <div id="digitando"></div>
           </form>
@@ -327,6 +329,16 @@
         </form>
       </section>
       <section>
+        <h3>Emojis do servidor</h3>
+        <p class="dica-cfg">A galera usa digitando <b>:nome:</b> no chat ou nas reações. Imagem quadrada, até 256 KB (GIF animado vale).</p>
+        <div class="srv-emojis" id="srv-emojis"></div>
+        <form class="linha-copiar" id="form-emoji">
+          <input type="file" id="emoji-arquivo" accept="image/png,image/jpeg,image/gif,image/webp" required>
+          <input id="emoji-nome" maxlength="32" placeholder="nome_do_emoji" required autocomplete="off">
+          <button class="btn-primario">Adicionar</button>
+        </form>
+      </section>
+      <section>
         <h3>Convite</h3>
         <p class="dica-cfg">Código atual: <b id="srv-convite"></b> — <button type="button" class="btn-link" id="btn-srv-convidar">ver link</button></p>
       </section>
@@ -371,6 +383,11 @@
       <button class="btn-primario">Criar enquete</button>
     </div>
   </form>
+  <div id="painel-gif" class="popover" hidden>
+    <input id="busca-gif" placeholder="Buscar GIF (ex.: risada, gg, triste…)" autocomplete="off">
+    <div id="grade-gif"></div>
+    <div class="fonte-gif" id="fonte-gif"></div>
+  </div>
   <div id="painel-sons" class="popover" hidden>
     <header>
       <h3>Soundboard</h3>

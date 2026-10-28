@@ -1324,6 +1324,7 @@ function irParaMensagem(servidor, canal, id) {
 
 const URL_RE = /https?:\/\/[^\s<]+/g;
 const IMG_RE = /\.(png|jpe?g|gif|webp)(\?.*)?$/i;
+const GIF_RE = /^https:\/\/(media\d*\.giphy\.com|i\.giphy\.com|media\.tenor\.com|c\.tenor\.com)\/[^\s<]+$/;
 const UPLOAD_RE = /^\/uploads\/[a-f0-9]+\.(png|jpg|gif|webp)$/;
 const ARQUIVO_RE = /^\/uploads\/[a-f0-9]{24}\/([^/?#]+)$/;
 const ehUpload = (texto) => texto.startsWith('/uploads/');
@@ -1394,18 +1395,46 @@ function mencionaEu(texto) {
   const nome = estado.eu?.nome;
   return !!nome && new RegExp(`@(?:todos|everyone|${escaparRe(nome)})${FIM_NOME}`, 'iu').test(texto);
 }
+// :nome: vira a imagem do emoji do servidor aberto
+function imgEmoji(e) {
+  const img = el('img', 'emoji-custom');
+  img.src = e.url;
+  img.alt = `:${e.nome}:`;
+  img.title = `:${e.nome}:`;
+  img.draggable = false;
+  return img;
+}
+function emojiDoServidor(texto) {
+  const nome = /^:([a-z0-9_]{2,32}):$/.exec(texto)?.[1];
+  return nome && !emDm() ? estado.servidor?.emojis?.find((e) => e.nome === nome) : null;
+}
+function comEmojis(trecho) {
+  const lista = emDm() ? [] : estado.servidor?.emojis ?? [];
+  if (!lista.length || !trecho.includes(':')) return [trecho];
+  const nos = [];
+  let i = 0;
+  for (const m of trecho.matchAll(/:([a-z0-9_]{2,32}):/g)) {
+    const e = lista.find((x) => x.nome === m[1]);
+    if (!e) continue;
+    nos.push(trecho.slice(i, m.index), imgEmoji(e));
+    i = m.index + m[0].length;
+  }
+  nos.push(trecho.slice(i));
+  return nos;
+}
+
 function comMencoes(trecho) {
   const nos = [];
   let i = 0;
   for (const m of trecho.matchAll(regexMencao())) {
-    nos.push(trecho.slice(i, m.index));
+    nos.push(...comEmojis(trecho.slice(i, m.index)));
     const marca = el('span', 'mencao', m[0]);
     const p = estado.perfis.find((x) => x.nome.toLowerCase() === m[0].slice(1).toLowerCase());
     if (p) marca.onclick = (e) => abrirPerfil(p.nome, e);
     nos.push(marca);
     i = m.index + m[0].length;
   }
-  nos.push(trecho.slice(i));
+  nos.push(...comEmojis(trecho.slice(i)));
   return nos;
 }
 
@@ -1423,6 +1452,20 @@ function imagemPreview(src) {
 
 function formatarTexto(texto) {
   const linha = el('div', 'linha');
+  // só um GIF (do botão GIF): mostra a imagem, sem o link
+  if (GIF_RE.test(texto)) {
+    linha.append(imagemPreview(texto));
+    return linha;
+  }
+  // só emojis do servidor: ficam grandes
+  if (/^(\s*:[a-z0-9_]{2,32}:\s*){1,6}$/.test(texto)) {
+    const nos = comEmojis(texto.trim());
+    if (nos.some((n) => n instanceof Element)) {
+      linha.classList.add('so-emoji');
+      linha.append(...nos);
+      return linha;
+    }
+  }
   if (UPLOAD_RE.test(texto)) {
     linha.append(imagemPreview(texto));
     return linha;
@@ -1519,20 +1562,30 @@ const EMOJIS = ['👍', '👎', '😂', '🤣', '😭', '😍', '🥰', '😎', 
   '💯', '❤️', '💀', '🎉', '👀', '✅', '❌', '🤡', '🫡', '🤝', '💪', '🎮', '🍕', '🍺', '😴', '🤯'];
 const reagir = (m, emoji) => socket.emit('msg:reagir', { id: m.id, emoji }, (res) => res?.erro && avisar(res.erro));
 
+// `m` = mensagem pra reagir, ou uma função que recebe o emoji escolhido (ex.: escrever no chat)
 function abrirSeletorEmoji(m, evento) {
   evento.stopPropagation();
   const alvo = evento.currentTarget.getBoundingClientRect();
   const pop = $('#seletor-emoji');
   fecharPopovers();
-  pop.replaceChildren(...EMOJIS.map((emoji) => {
-    const b = el('button', null, emoji);
+  const escolher = typeof m === 'function' ? m : (emoji) => reagir(m, emoji);
+  const botao = (conteudo, valor, titulo) => {
+    const b = el('button', null);
     b.type = 'button';
+    b.append(conteudo);
+    if (titulo) b.title = titulo;
     b.onclick = () => {
-      reagir(m, emoji);
+      escolher(valor);
       pop.hidden = true;
     };
     return b;
-  }));
+  };
+  const doServidor = emDm() ? [] : estado.servidor?.emojis ?? [];
+  pop.replaceChildren(
+    ...doServidor.map((e) => botao(imgEmoji(e), `:${e.nome}:`, `:${e.nome}:`)),
+    ...(doServidor.length ? [el('div', 'sep-emoji')] : []),
+    ...EMOJIS.map((emoji) => botao(emoji, emoji)),
+  );
   pop.hidden = false;
   const { width, height } = pop.getBoundingClientRect();
   pop.style.left = `${Math.max(8, Math.min(alvo.right - width, innerWidth - width - 8))}px`;
@@ -1546,7 +1599,10 @@ function linhaReacoes(m) {
     const b = el('button', 'reacao');
     b.type = 'button';
     b.classList.toggle('minha', r.contas.includes(estado.eu?.conta));
-    b.append(el('span', 'reacao-emoji', r.emoji), el('span', 'reacao-n', String(r.contas.length)));
+    const custom = emojiDoServidor(r.emoji);
+    const rosto = el('span', 'reacao-emoji');
+    rosto.append(custom ? imgEmoji(custom) : r.emoji);
+    b.append(rosto, el('span', 'reacao-n', String(r.contas.length)));
     b.title = `${r.contas.map((c) => perfilPorConta(c)?.nome ?? 'alguém').join(', ')} reagiu com ${r.emoji}`;
     b.onclick = () => reagir(m, r.emoji);
     linha.append(b);
@@ -3768,6 +3824,105 @@ $('#painel-enquete').onsubmit = (e) => {
   });
 };
 
+// ---------- GIFs ----------
+let buscaGifTimer = null;
+let buscaGifAtual = 0;
+function buscarGif(termo) {
+  const n = ++buscaGifAtual;
+  socket.emit('gifs:buscar', termo, (r) => {
+    if (n !== buscaGifAtual) return; // chegou resposta de uma busca antiga
+    const grade = $('#grade-gif');
+    if (r?.erro === 'semChave') {
+      grade.replaceChildren(el('p', 'vazio-gif', 'A busca de GIF ainda não foi ligada neste servidor (falta a chave do Tenor ou GIPHY). Dá pra colar link de GIF ou enviar um arquivo .gif.'));
+      return;
+    }
+    if (r?.erro) return grade.replaceChildren(el('p', 'vazio-gif', r.erro === 'Calma' ? 'Buscando…' : r.erro));
+    $('#fonte-gif').textContent = r.fonte ? `GIFs por ${r.fonte}` : '';
+    if (!r.gifs.length) return grade.replaceChildren(el('p', 'vazio-gif', 'Nenhum GIF encontrado.'));
+    grade.replaceChildren(...r.gifs.map((g) => {
+      const b = el('button', 'gif');
+      b.type = 'button';
+      b.title = g.titulo;
+      const img = el('img');
+      img.src = g.previa;
+      img.loading = 'lazy';
+      img.alt = g.titulo;
+      if (g.largura && g.altura) img.style.aspectRatio = `${g.largura} / ${g.altura}`;
+      b.append(img);
+      b.onclick = () => {
+        if (estado.canalTexto == null) return;
+        socket.emit('mensagem', { canal: estado.canalTexto, texto: g.url });
+        fecharPopovers();
+        $('#input-msg').focus();
+      };
+      return b;
+    }));
+  });
+}
+$('#btn-gif').onclick = (e) => {
+  e.stopPropagation();
+  const painel = $('#painel-gif');
+  if (!painel.hidden) return fecharPopovers();
+  fecharPopovers();
+  painel.hidden = false;
+  const r = $('#btn-gif').getBoundingClientRect();
+  const { width, height } = painel.getBoundingClientRect();
+  painel.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, r.right - width))}px`;
+  painel.style.top = `${Math.max(8, r.top - height - 12)}px`;
+  $('#busca-gif').value = '';
+  $('#grade-gif').replaceChildren(el('p', 'vazio-gif', 'Carregando…'));
+  $('#busca-gif').focus();
+  buscarGif('');
+};
+$('#busca-gif').oninput = () => {
+  clearTimeout(buscaGifTimer);
+  buscaGifTimer = setTimeout(() => buscarGif($('#busca-gif').value.trim()), 450);
+};
+
+// emoji no chat: escreve onde está o cursor
+$('#btn-emoji-msg').onclick = (e) => abrirSeletorEmoji((emoji) => {
+  const input = $('#input-msg');
+  const ini = input.selectionStart ?? input.value.length;
+  const fim = input.selectionEnd ?? ini;
+  input.value = input.value.slice(0, ini) + emoji + input.value.slice(fim);
+  input.focus();
+  input.selectionStart = input.selectionEnd = ini + emoji.length;
+}, e);
+
+// emojis do servidor (configurações do servidor, só admin)
+function renderEmojisServidor() {
+  const lista = estado.servidor?.emojis ?? [];
+  $('#srv-emojis').replaceChildren(...(lista.length ? lista.map((e) => {
+    const item = el('div', 'srv-emoji');
+    const x = el('button', 'btn-icone');
+    x.type = 'button';
+    x.title = `Apagar :${e.nome}:`;
+    x.append(icone('fechar'));
+    x.onclick = () => {
+      if (confirm(`Apagar o emoji :${e.nome}:?`)) socket.emit('emoji:apagar', e.nome, (r) => r?.erro && avisar(r.erro));
+    };
+    item.append(imgEmoji(e), el('span', null, `:${e.nome}:`), x);
+    return item;
+  }) : [el('p', 'dica-cfg', 'Nenhum ainda.')]));
+}
+$('#emoji-arquivo').onchange = () => {
+  const f = $('#emoji-arquivo').files[0];
+  if (f && !$('#emoji-nome').value) {
+    $('#emoji-nome').value = f.name.replace(/\.[^.]+$/, '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9_]+/g, '_').slice(0, 32);
+  }
+};
+$('#form-emoji').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = $('#emoji-arquivo').files[0];
+  if (!f) return;
+  if (f.size > 256 * 1024) return avisar('Imagem grande demais pra emoji (máx. 256 KB).');
+  socket.timeout(30000).emit('emoji:enviar', { nome: $('#emoji-nome').value, dados: await f.arrayBuffer() }, (err, r) => {
+    if (err) return avisar('Não deu pra enviar (conexão lenta?).');
+    if (r?.erro) return avisar(r.erro);
+    $('#form-emoji').reset();
+  });
+};
+
 function fecharPopovers() {
   $$('.popover').forEach((e) => (e.hidden = true));
 }
@@ -3851,6 +4006,7 @@ function renderModalServidor(forcar = false) {
     const lista = srv.canais.filter((c) => c.tipo === tipo);
     $(`#srv-canais-${tipo}`).replaceChildren(...lista.map((c) => linhaCanal(c, lista)));
   }
+  renderEmojisServidor();
   $('#srv-admins').replaceChildren(...estado.perfis.map((p) => {
     const li = el('li');
     const marcar = el('input');

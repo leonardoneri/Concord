@@ -1388,3 +1388,27 @@ textarea {
 #form-evento[hidden] { display: none; }
 .linha-evento { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 #btn-novo-evento { justify-self: start; }
+
+/* ---------- emojis do servidor e GIFs ---------- */
+.emoji-custom { width: 22px; height: 22px; object-fit: contain; vertical-align: -5px; margin: 0 1px; }
+.linha.so-emoji .emoji-custom { width: 48px; height: 48px; vertical-align: middle; }
+.reacao-emoji .emoji-custom { width: 18px; height: 18px; vertical-align: -3px; margin: 0; }
+#seletor-emoji button .emoji-custom { width: 26px; height: 26px; vertical-align: middle; margin: 0; }
+#seletor-emoji .sep-emoji { grid-column: 1 / -1; height: 1px; background: var(--borda, #3f4147); margin: 4px 0; }
+.caixa-msg .btn-gif { font-size: 12px; font-weight: 800; letter-spacing: .5px; border: 2px solid currentColor; border-radius: 4px; padding: 0 4px; height: 22px; align-items: center; margin-right: 8px; }
+.caixa-msg #btn-emoji-msg { margin-right: 4px; }
+#painel-gif { position: fixed; width: 420px; max-width: calc(100vw - 16px); height: 440px; display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+#painel-gif[hidden] { display: none; }
+#busca-gif { width: 100%; }
+#grade-gif { flex: 1; overflow-y: auto; columns: 2; column-gap: 6px; }
+#grade-gif .gif { display: block; width: 100%; margin: 0 0 6px; padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: var(--sidebar); cursor: pointer; break-inside: avoid; }
+#grade-gif .gif img { display: block; width: 100%; height: auto; min-height: 60px; }
+#grade-gif .gif:hover { outline: 2px solid var(--acento); }
+.vazio-gif { column-span: all; margin: 8px 4px; color: var(--texto-2); font-size: 14px; line-height: 1.5; }
+.fonte-gif { font-size: 11px; color: var(--texto-2); text-align: right; }
+.srv-emojis { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.srv-emoji { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 8px; border-radius: 6px; background: var(--sidebar); font-size: 14px; }
+.srv-emoji .emoji-custom { width: 28px; height: 28px; }
+.srv-emoji .btn-icone .ic { width: 14px; height: 14px; }
+#form-emoji input[type=file] { flex: 1; min-width: 0; font-size: 13px; }
+#form-emoji #emoji-nome { flex: 1; }
