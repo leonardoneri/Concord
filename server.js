@@ -36,6 +36,14 @@ const MAX_IMAGEM = 10 * 1024 * 1024;
 // ---------- contas ----------
 const scryptAsync = promisify(scrypt);
 const USUARIO_RE = /^[\p{L}\p{N}_.-]{2,24}$/u;
+
+// Nome de exibição: pode ter espaço e ser trocado; espaços repetidos viram um só
+function limparNome(nome) {
+  nome = String(nome ?? '').replace(/[\p{C}]/gu, '').replace(/\s+/g, ' ').trim();
+  if ([...nome].length < 2 || [...nome].length > 32) return { erro: 'O nome precisa ter de 2 a 32 caracteres' };
+  if (!/[\p{L}\p{N}]/u.test(nome)) return { erro: 'O nome precisa ter pelo menos uma letra ou número' };
+  return { nome };
+}
 const MAX_PREFS = 20_000; // bytes do JSON de configurações por conta
 
 async function hashSenha(senha, sal = randomBytes(16)) {
@@ -113,9 +121,20 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       criado_em INTEGER NOT NULL
     );
   `);
+  // Contas criadas antes do nome de exibição existir: o nome começa igual ao usuário
+  if (!db.prepare('PRAGMA table_info(contas)').all().some((c) => c.name === 'nome')) {
+    db.exec('ALTER TABLE contas ADD COLUMN nome TEXT');
+  }
+  db.exec(`
+    UPDATE contas SET nome = usuario WHERE nome IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_contas_nome ON contas (nome COLLATE NOCASE);
+  `);
   const sql = {
-    criarConta: db.prepare('INSERT INTO contas (usuario, senha, criado_em) VALUES (?, ?, ?)'),
+    criarConta: db.prepare('INSERT INTO contas (usuario, nome, senha, criado_em) VALUES (?, ?, ?, ?)'),
     contaPorUsuario: db.prepare('SELECT * FROM contas WHERE usuario = ?'),
+    contaPorNome: db.prepare('SELECT * FROM contas WHERE nome = ? COLLATE NOCASE'),
+    trocarNome: db.prepare('UPDATE contas SET nome = ? WHERE id = ?'),
+    renomearMensagens: db.prepare('UPDATE mensagens SET autor = ?, cor = ? WHERE autor = ?'),
     contaPorToken: db.prepare('SELECT contas.* FROM sessoes JOIN contas ON contas.id = sessoes.conta WHERE sessoes.token = ?'),
     criarSessao: db.prepare('INSERT INTO sessoes (token, conta, criado_em) VALUES (?, ?, ?)'),
     apagarSessao: db.prepare('DELETE FROM sessoes WHERE token = ?'),
@@ -162,7 +181,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (typeof ack === 'function') ack({ pedeConvite: !!senha });
     });
 
-    socket.on('conta:criar', async ({ usuario, senha: senhaConta, convite } = {}, ack) => {
+    socket.on('conta:criar', async ({ usuario, nome, senha: senhaConta, convite } = {}, ack) => {
       if (typeof ack !== 'function') return;
       usuario = String(usuario ?? '').trim();
       senhaConta = String(senhaConta ?? '');
@@ -174,8 +193,11 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         limitador.errou(ip);
         return ack({ erro: 'Código de convite errado' });
       }
+      const limpo = limparNome(String(nome ?? '').trim() || usuario);
+      if (limpo.erro) return ack({ erro: limpo.erro });
       if (sql.contaPorUsuario.get(usuario)) return ack({ erro: `O usuário "${usuario}" já existe. Escolhe outro ou entra com ele.` });
-      const { lastInsertRowid } = sql.criarConta.run(usuario, await hashSenha(senhaConta), Date.now());
+      if (sql.contaPorNome.get(limpo.nome)) return ack({ erro: `Já tem alguém chamado "${limpo.nome}". Escolhe outro nome de exibição.` });
+      const { lastInsertRowid } = sql.criarConta.run(usuario, limpo.nome, await hashSenha(senhaConta), Date.now());
       ack({ token: novaSessao(Number(lastInsertRowid)) });
     });
 
@@ -195,6 +217,23 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       socket.disconnect(true);
     });
 
+    socket.on('conta:nome', (novo, ack) => {
+      const u = eu();
+      if (!u || typeof ack !== 'function') return;
+      const limpo = limparNome(novo);
+      if (limpo.erro) return ack({ erro: limpo.erro });
+      const dono = sql.contaPorNome.get(limpo.nome);
+      if (dono && dono.id !== u.conta) return ack({ erro: `Já tem alguém chamado "${limpo.nome}"` });
+      const antigo = u.nome;
+      const cor = corDoNome(limpo.nome);
+      sql.trocarNome.run(limpo.nome, u.conta);
+      sql.renomearMensagens.run(limpo.nome, cor, antigo);
+      Object.assign(u, { nome: limpo.nome, cor });
+      io.to('todos').emit('renomeado', { de: antigo, para: limpo.nome });
+      emitirPresenca();
+      ack({ nome: limpo.nome });
+    });
+
     socket.on('prefs', (prefs) => {
       const u = eu();
       if (!u || typeof prefs !== 'object' || prefs === null) return;
@@ -206,7 +245,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (typeof ack !== 'function') return;
       const conta = typeof token === 'string' && sql.contaPorToken.get(hashToken(token));
       if (!conta) return ack({ erro: 'Sua sessão expirou. Entra de novo.', sessaoInvalida: true });
-      const nome = conta.usuario;
+      const nome = conta.nome;
 
       // A mesma conta aberta em outro lugar (ou reconectando antes do servidor perceber a queda): derruba a velha
       for (const o of [...usuarios.values()]) {
@@ -229,7 +268,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         tela: null,
       });
       socket.join('todos');
-      ack({ id: socket.id, nome, prefs: JSON.parse(conta.prefs), canaisTexto: CANAIS_TEXTO, canaisVoz: CANAIS_VOZ, iceServers: ICE_SERVERS });
+      ack({ id: socket.id, nome, usuario: conta.usuario, prefs: JSON.parse(conta.prefs), canaisTexto: CANAIS_TEXTO, canaisVoz: CANAIS_VOZ, iceServers: ICE_SERVERS });
       emitirPresenca();
     });
 

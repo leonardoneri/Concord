@@ -220,7 +220,12 @@ $('#form-login').addEventListener('submit', (e) => {
   if (!socket.connected) socket.connect();
   const botao = $('#btn-login');
   botao.disabled = true;
-  const dados = { usuario: $('#usuario').value.trim(), senha: $('#senha').value, convite: $('#convite').value };
+  const dados = {
+    usuario: $('#usuario').value.trim(),
+    nome: $('#nome-exibicao').value.trim(),
+    senha: $('#senha').value,
+    convite: $('#convite').value,
+  };
   socket.emit(modoLogin === 'criar' ? 'conta:criar' : 'conta:entrar', dados, (res) => {
     botao.disabled = false;
     if (res.erro) {
@@ -246,7 +251,7 @@ function entrar() {
       return;
     }
     const primeiraVez = !estado.eu;
-    estado.eu = { id: res.id, nome: res.nome };
+    estado.eu = { id: res.id, nome: res.nome, usuario: res.usuario };
     estado.canaisTexto = res.canaisTexto;
     estado.canaisVoz = res.canaisVoz;
     estado.iceServers = res.iceServers;
@@ -258,6 +263,24 @@ function entrar() {
     abrirTexto(primeiraVez ? res.canaisTexto[0] : estado.canalTexto);
   });
 }
+
+// Alguém trocou o nome: o volume ajustado pra essa pessoa vai junto pro nome novo
+socket.on('renomeado', ({ de, para }) => {
+  for (const tipo of ['mic', 'tela']) {
+    const antigo = volumes[chaveVolume(de, tipo)];
+    if (antigo === undefined) continue;
+    volumes[chaveVolume(para, tipo)] = antigo;
+    delete volumes[chaveVolume(de, tipo)];
+  }
+  salvarStorage('volumes', volumes);
+  if (estado.eu?.nome === de) {
+    estado.eu.nome = para;
+    $('#meu-nome').textContent = para;
+    sincronizarPrefs();
+  }
+  // recarrega o canal aberto pra mostrar o nome novo nas mensagens antigas
+  if (estado.view === 'texto' && estado.canalTexto) abrirTexto(estado.canalTexto);
+});
 
 // ---------- configurações salvas na conta ----------
 // Volume de cada pessoa, qualidade da tela etc. vão pro servidor; microfone/câmera ficam por PC
@@ -1135,6 +1158,8 @@ async function abrirConfig() {
     $(sel).value = dispositivos[chave];
     if ($(sel).value !== dispositivos[chave]) $(sel).value = '';
   };
+  $('#cfg-nome').value = estado.eu?.nome ?? '';
+  $('#cfg-usuario').textContent = estado.eu?.usuario ? `Usuário pra entrar: ${estado.eu.usuario}` : '';
   preencher('#cfg-mic', 'audioinput', 'mic');
   preencher('#cfg-saida', 'audiooutput', 'saida');
   preencher('#cfg-cam', 'videoinput', 'cam');
@@ -1142,6 +1167,23 @@ async function abrirConfig() {
   $('#cfg-fps').value = String(fpsTela());
 
 }
+
+function salvarNome() {
+  const novo = $('#cfg-nome').value.trim();
+  if (!novo || novo === estado.eu?.nome) return;
+  const botao = $('#btn-salvar-nome');
+  botao.disabled = true;
+  socket.emit('conta:nome', novo, (res) => {
+    botao.disabled = false;
+    if (res.erro) return avisar(res.erro);
+    $('#cfg-nome').value = res.nome;
+    botao.textContent = 'Salvo!';
+    botao.classList.add('copiado');
+    setTimeout(() => { botao.textContent = 'Salvar'; botao.classList.remove('copiado'); }, 1500);
+  });
+}
+$('#btn-salvar-nome').onclick = salvarNome;
+$('#cfg-nome').onkeydown = (e) => { if (e.key === 'Enter') salvarNome(); };
 
 $('#btn-sair-conta').onclick = () => {
   const t = token;

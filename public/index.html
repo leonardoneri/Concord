@@ -22,10 +22,13 @@
       <label>Senha <span class="req">*</span>
         <input id="senha" type="password" maxlength="200" autocomplete="current-password" required>
       </label>
+      <label class="so-criar" hidden>Nome de exibição
+        <input id="nome-exibicao" maxlength="32" autocomplete="nickname" placeholder="Igual ao usuário, se deixar vazio">
+      </label>
       <label class="so-criar" id="campo-convite" hidden>Código de convite <span class="req">*</span>
         <input id="convite" type="password" autocomplete="off" placeholder="Peça pra quem administra o servidor">
       </label>
-      <p class="so-criar dica-login" hidden>Seu usuário é o nome que a galera vê. Use 2 a 24 letras, números, ponto, traço ou _.</p>
+      <p class="so-criar dica-login" hidden>O usuário é só pra entrar: sem espaço, de 2 a 24 letras, números, ponto, traço ou _. O nome de exibição é o que a galera vê, pode ter espaço e dá pra trocar depois.</p>
       <button type="submit" class="btn-primario" id="btn-login">Entrar</button>
       <p id="erro-login"></p>
       <button type="button" class="btn-link trocar-servidor" hidden>Trocar de servidor</button>
@@ -129,9 +132,16 @@
   <div id="modal-config" class="modal" hidden>
     <div class="modal-caixa">
       <header>
-        <h2>Configurações de voz e vídeo</h2>
+        <h2>Configurações</h2>
         <button class="btn-icone" id="btn-fechar-config" title="Fechar" data-icone="fechar"></button>
       </header>
+      <label>Nome de exibição
+        <div class="linha-copiar">
+          <input id="cfg-nome" maxlength="32" autocomplete="off">
+          <button type="button" class="btn-primario" id="btn-salvar-nome">Salvar</button>
+        </div>
+      </label>
+      <p class="dica-cfg" id="cfg-usuario"></p>
       <label>Dispositivo de entrada (microfone)<select id="cfg-mic"></select></label>
       <label>Dispositivo de saída<select id="cfg-saida"></select></label>
       <label>Câmera<select id="cfg-cam"></select></label>
