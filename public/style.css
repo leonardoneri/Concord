@@ -1358,3 +1358,33 @@ textarea {
 #enquete-opcoes { display: grid; gap: 6px; }
 .linha-check { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--texto-2); cursor: pointer; }
 .linha-check input { width: auto; margin: 0; }
+
+/* ---------- eventos ---------- */
+.linha-eventos {
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 16px); margin: 8px 8px 4px; padding: 8px;
+  border: 0; border-radius: 6px; background: none; color: var(--texto-2); font: inherit; font-size: 15px; font-weight: 500; cursor: pointer; text-align: left;
+}
+.linha-eventos:hover { background: var(--hover); color: var(--texto); }
+.linha-eventos[hidden] { display: none; }
+.linha-eventos .ic { width: 18px; height: 18px; }
+#texto-eventos { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.linha-eventos.ao-vivo { color: var(--verde); }
+.badge-eventos { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--acento); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+.badge-eventos[hidden] { display: none; }
+.modal-eventos { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; }
+#lista-eventos { display: grid; gap: 10px; }
+.vazio-eventos { margin: 0; color: var(--texto-2); font-size: 14px; line-height: 1.5; }
+.evento { display: grid; gap: 4px; padding: 12px 14px; border-radius: 8px; background: var(--sidebar); border-left: 3px solid var(--acento); }
+.evento.ao-vivo { border-left-color: var(--verde); }
+.evento-quando { font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--acento); }
+.evento.ao-vivo .evento-quando { color: var(--verde); }
+.evento-titulo { font-size: 17px; font-weight: 600; color: var(--forte); }
+.evento-descricao { font-size: 14px; color: var(--texto); white-space: pre-wrap; }
+.evento-info { font-size: 13px; color: var(--texto-2); }
+.evento-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.evento-acoes button { padding: 6px 14px; font-size: 14px; }
+.evento-acoes .vou { color: var(--verde); }
+#form-evento { display: grid; gap: 12px; padding: 12px; border-radius: 8px; background: var(--sidebar); }
+#form-evento[hidden] { display: none; }
+.linha-evento { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+#btn-novo-evento { justify-self: start; }

@@ -35,6 +35,7 @@ const ICONES = {
   desligar: '<path fill="currentColor" d="M3 15.5c5-5 13-5 18 0l-2.5 2.5-3.2-1.6v-2.8a10 10 0 0 0-6.6 0v2.8L5.5 18z"/>',
   config: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   jogo: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><rect x="2" y="6" width="20" height="12" rx="4"/>',
+  calendario: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   enquete: '<path d="M3 3v18h18"/><path d="M7 16v-4M12 16V8M17 16v-7"/>',
   tv: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/>',
   sons: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
@@ -435,6 +436,7 @@ function entrar() {
     if (primeiraVez && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
     if (primeiraVez) setTimeout(() => mostrarNovidades(), 800);
     if (meuJogo) socket.emit('jogo', meuJogo);
+    if (res.eventos) agendarLembretes(res.eventos, null);
     const convite = conviteDaUrl();
     if (convite) {
       esquecerConviteDaUrl();
@@ -451,6 +453,7 @@ function aplicarServidor(srv) {
   estado.servidor = srv;
   estado.canaisTexto = srv.canais.filter((c) => c.tipo === 'texto');
   estado.canaisVoz = srv.canais.filter((c) => c.tipo === 'voz');
+  if (srv.eventos && estado.eu) agendarLembretes(srv.eventos, srv.id);
   document.title = srv.nome ? `${srv.nome} · Concord` : 'Concord';
   const i = estado.servidores.findIndex((x) => x.id === srv.id);
   if (i >= 0) estado.servidores[i] = { id: srv.id, nome: srv.nome, icone: srv.icone, dono: srv.dono };
@@ -654,6 +657,7 @@ socket.on('servidores', (lista) => {
 });
 
 socket.on('servidor', (srv) => {
+  if (srv.eventos) agendarLembretes(srv.eventos, srv.id);
   if (srv.id !== estado.servidor.id) {
     // outro servidor meu mudou nome/ícone: só atualiza a barra da esquerda
     const i = estado.servidores.findIndex((x) => x.id === srv.id);
@@ -829,6 +833,7 @@ socket.on('presenca', (lista) => {
 // ---------- render ----------
 function render() {
   renderServidor();
+  renderEventos();
   renderCanais();
   renderMembros();
   renderPainel();
@@ -908,6 +913,171 @@ function renderDms() {
     return li;
   }));
 }
+
+// ---------- eventos agendados ----------
+const DURA_EVENTO = 3 * 60 * 60 * 1000;
+const lembretes = new Map(); // id do evento -> { ev, timers }
+const eventoAgora = (ev) => ev.inicio <= Date.now() && Date.now() < ev.inicio + DURA_EVENTO;
+
+function quandoEvento(inicio) {
+  const d = new Date(inicio);
+  const hoje = new Date();
+  const amanha = new Date(Date.now() + 864e5);
+  const hora = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === hoje.toDateString()) return `Hoje às ${hora}`;
+  if (d.toDateString() === amanha.toDateString()) return `Amanhã às ${hora}`;
+  const dia = d.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'short' });
+  return `${dia[0].toUpperCase()}${dia.slice(1)} às ${hora}`;
+}
+
+function renderBotaoEventos() {
+  const eventos = estado.servidor?.eventos ?? [];
+  const agora = eventos.find(eventoAgora);
+  $('#btn-eventos').hidden = !estado.servidor?.id || emDm();
+  $('#btn-eventos').classList.toggle('ao-vivo', !!agora);
+  $('#texto-eventos').textContent = agora ? `Agora: ${agora.titulo}` : 'Eventos';
+  const futuros = eventos.filter((e) => e.inicio > Date.now()).length;
+  $('#badge-eventos').hidden = !futuros;
+  $('#badge-eventos').textContent = futuros;
+}
+
+function cartaoEvento(ev) {
+  const c = el('div', `evento${eventoAgora(ev) ? ' ao-vivo' : ''}`);
+  const vou = ev.confirmados.includes(estado.eu.conta);
+  c.append(el('div', 'evento-quando', eventoAgora(ev) ? '🔴 Acontecendo agora' : quandoEvento(ev.inicio)));
+  c.append(el('div', 'evento-titulo', ev.titulo));
+  if (ev.descricao) c.append(el('div', 'evento-descricao', ev.descricao));
+  const sala = ev.canal && canalPorId(ev.canal);
+  const nomes = ev.confirmados.map((x) => perfilPorConta(x)?.nome ?? 'alguém');
+  c.append(el('div', 'evento-info', `${sala ? `🔊 ${sala.nome} · ` : ''}Marcado por ${ev.autor} · ${nomes.length} ${nomes.length === 1 ? 'vai' : 'vão'}${nomes.length ? `: ${nomes.join(', ')}` : ''}`));
+  const acoes = el('div', 'evento-acoes');
+  const b = el('button', vou ? 'btn-secundario vou' : 'btn-primario', vou ? '✓ Vou' : 'Vou');
+  b.type = 'button';
+  b.title = vou ? 'Clique pra desmarcar' : 'Confirmar presença (você recebe lembrete)';
+  b.onclick = () => socket.emit('evento:confirmar', ev.id, (r) => r?.erro && avisar(r.erro));
+  acoes.append(b);
+  if (sala && eventoAgora(ev)) {
+    const entrar = el('button', 'btn-primario verde', 'Entrar na sala');
+    entrar.type = 'button';
+    entrar.onclick = () => {
+      $('#modal-eventos').hidden = true;
+      entrarVoz(sala.id);
+    };
+    acoes.append(entrar);
+  }
+  if (ev.conta === estado.eu.conta || perfilPorConta(estado.eu.conta)?.admin) {
+    const x = el('button', 'btn-secundario', 'Cancelar evento');
+    x.type = 'button';
+    x.onclick = () => {
+      if (confirm(`Cancelar o evento "${ev.titulo}"?`)) socket.emit('evento:apagar', ev.id, (r) => r?.erro && avisar(r.erro));
+    };
+    acoes.append(x);
+  }
+  c.append(acoes);
+  return c;
+}
+
+function renderEventos() {
+  renderBotaoEventos();
+  if ($('#modal-eventos').hidden) return;
+  const eventos = estado.servidor?.eventos ?? [];
+  $('#lista-eventos').replaceChildren(...(eventos.length
+    ? eventos.map(cartaoEvento)
+    : [el('p', 'vazio-eventos', 'Nenhum evento marcado. Marque um jogo com a galera: quem confirmar recebe lembrete 10 minutos antes.')]));
+}
+
+function abrirEventos() {
+  $('#modal-eventos').hidden = false;
+  $('#form-evento').hidden = true;
+  $('#btn-novo-evento').hidden = false;
+  renderEventos();
+}
+$('#btn-eventos').onclick = abrirEventos;
+$('#btn-fechar-eventos').onclick = () => ($('#modal-eventos').hidden = true);
+$('#modal-eventos').onclick = (e) => { if (e.target.id === 'modal-eventos') e.target.hidden = true; };
+$('#btn-novo-evento').onclick = () => {
+  $('#form-evento').reset();
+  // próxima hora cheia
+  const d = new Date(Date.now() + 36e5);
+  d.setMinutes(0, 0, 0);
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16);
+  $('#evento-inicio').value = local;
+  $('#evento-inicio').min = new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16);
+  $('#evento-canal').replaceChildren(new Option('Nenhuma', ''), ...estado.canaisVoz.map((c) => new Option(c.nome, c.id)));
+  $('#evento-canal').value = estado.canaisVoz[0]?.id ?? '';
+  $('#form-evento').hidden = false;
+  $('#btn-novo-evento').hidden = true;
+  $('#evento-titulo').focus();
+};
+$('#btn-cancelar-evento').onclick = () => {
+  $('#form-evento').hidden = true;
+  $('#btn-novo-evento').hidden = false;
+};
+$('#form-evento').onsubmit = (e) => {
+  e.preventDefault();
+  const inicio = new Date($('#evento-inicio').value).getTime();
+  socket.emit('evento:criar', {
+    servidor: estado.servidor.id,
+    titulo: $('#evento-titulo').value,
+    descricao: $('#evento-descricao').value,
+    inicio,
+    canal: Number($('#evento-canal').value) || null,
+  }, (r) => {
+    if (r?.erro) return avisar(r.erro);
+    $('#form-evento').hidden = true;
+    $('#btn-novo-evento').hidden = false;
+  });
+};
+
+// alguém marcou um evento no servidor
+socket.on('evento:novo', (ev) => {
+  if (ev.conta === estado.eu?.conta) return;
+  const srv = estado.servidores.find((s) => s.id === ev.servidor);
+  avisar(`📅 ${ev.autor} marcou "${ev.titulo}" (${quandoEvento(ev.inicio)})${srv && srv.id !== estado.servidor.id ? ` em ${srv.nome}` : ''}. Veja em Eventos.`, 8000);
+});
+
+// Lembretes: 10 min antes e na hora, dos eventos que eu confirmei (de qualquer servidor)
+function lembrar(ev, quando) {
+  const sala = ev.canal ? `: entre na sala de voz` : '';
+  const texto = quando === 'antes' ? `📅 "${ev.titulo}" começa em 10 minutos` : `📅 Começou: "${ev.titulo}"${sala}`;
+  avisar(texto, 15000);
+  som('entrar');
+  if (window.Notification?.permission === 'granted') {
+    const n = new Notification('Concord: evento', { body: texto });
+    n.onclick = () => {
+      appDesktop?.mostrar?.();
+      window.focus();
+      abrirServidor(ev.servidor);
+      setTimeout(abrirEventos, 500);
+    };
+  }
+}
+function agendarLembretes(eventos, servidor) {
+  // eventos desse servidor (ou da lista inicial) que sumiram/foram desmarcados: cancela
+  for (const [id, l] of lembretes) {
+    if ((servidor == null || l.ev.servidor === servidor) && !eventos.some((e) => e.id === id && e.confirmados.includes(estado.eu.conta))) {
+      l.timers.forEach(clearTimeout);
+      lembretes.delete(id);
+    }
+  }
+  for (const ev of eventos) {
+    if (!ev.confirmados.includes(estado.eu.conta)) continue;
+    const velho = lembretes.get(ev.id);
+    if (velho?.ev.inicio === ev.inicio) {
+      velho.ev = ev;
+      continue;
+    }
+    velho?.timers.forEach(clearTimeout);
+    const timers = [];
+    const ate = (t) => t - Date.now();
+    // setTimeout não aguenta mais de ~24 dias; o lembrete é reagendado quando a lista chegar de novo
+    if (ate(ev.inicio - 10 * 6e4) > 0 && ate(ev.inicio) < 2 ** 31 - 1) timers.push(setTimeout(() => lembrar(ev, 'antes'), ate(ev.inicio - 10 * 6e4)));
+    if (ate(ev.inicio) > 0 && ate(ev.inicio) < 2 ** 31 - 1) timers.push(setTimeout(() => lembrar(ev, 'agora'), ate(ev.inicio)));
+    lembretes.set(ev.id, { ev, timers });
+  }
+}
+// "Acontecendo agora" muda sozinho com o tempo
+setInterval(() => estado.servidor?.eventos?.length && renderEventos(), 30_000);
 
 function renderCanais() {
   renderDms();

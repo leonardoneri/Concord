@@ -55,6 +55,8 @@ const STATUS = ['online', 'ausente', 'ocupado', 'invisivel'];
 const EMOJI_RE = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3)(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}]|\u200D\p{Extended_Pictographic}\uFE0F?)*$/u;
 // Arquivos que o navegador mostra direto; o resto sempre baixa (nunca abre como página)
 const MAX_SOM = 1024 * 1024; // soundboard: sons curtos
+const DURA_EVENTO = 3 * 60 * 60 * 1000; // evento some da lista 3 h depois de começar
+const MAX_EVENTOS = 30; // eventos marcados ao mesmo tempo por servidor
 const MAX_SONS = 48; // por servidor
 const EXT_EXIBIVEIS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'mov', 'mp3', 'ogg', 'wav', 'm4a', 'pdf', 'txt']);
 
@@ -206,6 +208,21 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       entrou_em INTEGER NOT NULL,
       PRIMARY KEY (servidor, conta)
     );
+    CREATE TABLE IF NOT EXISTS eventos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      servidor INTEGER NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT NOT NULL DEFAULT '',
+      inicio INTEGER NOT NULL,
+      canal INTEGER,
+      conta INTEGER NOT NULL,
+      criado_em INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS presencas (
+      evento INTEGER NOT NULL,
+      conta INTEGER NOT NULL,
+      PRIMARY KEY (evento, conta)
+    );
     CREATE TABLE IF NOT EXISTS votos (
       mensagem INTEGER NOT NULL,
       conta INTEGER NOT NULL,
@@ -305,6 +322,20 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     criarSom: db.prepare('INSERT INTO sons (servidor, nome, emoji, url, conta, criado_em) VALUES (?, ?, ?, ?, ?, ?)'),
     apagarSom: db.prepare('DELETE FROM sons WHERE id = ?'),
     apagarSonsDo: db.prepare('DELETE FROM sons WHERE servidor = ?'),
+    // eventos que ainda não acabaram (some 3 h depois de começar)
+    eventosDo: db.prepare('SELECT * FROM eventos WHERE servidor = ? AND inicio > ? ORDER BY inicio'),
+    evento: db.prepare('SELECT * FROM eventos WHERE id = ?'),
+    contarEventos: db.prepare('SELECT COUNT(*) AS n FROM eventos WHERE servidor = ? AND inicio > ?'),
+    criarEvento: db.prepare('INSERT INTO eventos (servidor, titulo, descricao, inicio, canal, conta, criado_em) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+    apagarEvento: db.prepare('DELETE FROM eventos WHERE id = ?'),
+    apagarEventosDo: db.prepare('DELETE FROM eventos WHERE servidor = ?'),
+    presencasDe: db.prepare('SELECT conta FROM presencas WHERE evento = ? ORDER BY rowid'),
+    temPresenca: db.prepare('SELECT 1 FROM presencas WHERE evento = ? AND conta = ?'),
+    confirmar: db.prepare('INSERT OR IGNORE INTO presencas (evento, conta) VALUES (?, ?)'),
+    desconfirmar: db.prepare('DELETE FROM presencas WHERE evento = ? AND conta = ?'),
+    apagarPresencas: db.prepare('DELETE FROM presencas WHERE evento = ?'),
+    meusEventos: db.prepare(`SELECT e.* FROM eventos e JOIN presencas p ON p.evento = e.id JOIN membros m ON m.servidor = e.servidor AND m.conta = p.conta
+      WHERE p.conta = ? AND e.inicio > ? ORDER BY e.inicio`),
     temReacao: db.prepare('SELECT 1 FROM reacoes WHERE mensagem = ? AND conta = ? AND emoji = ?'),
     emojisDiferentes: db.prepare('SELECT COUNT(DISTINCT emoji) AS n FROM reacoes WHERE mensagem = ?'),
     reagir: db.prepare('INSERT INTO reacoes (mensagem, conta, emoji) VALUES (?, ?, ?)'),
@@ -421,6 +452,14 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       ...resumoServidor(s),
       convite: s.convite,
       canais: sql.canaisDo.all(id).map(({ id: cid, tipo, nome, topico }) => ({ id: cid, tipo, nome, topico })),
+      eventos: sql.eventosDo.all(id, Date.now() - DURA_EVENTO).map(eventoPublico),
+    };
+  }
+  function eventoPublico(e) {
+    return {
+      id: e.id, servidor: e.servidor, titulo: e.titulo, descricao: e.descricao, inicio: e.inicio, canal: e.canal,
+      conta: e.conta, autor: sql.contaPorId.get(e.conta)?.nome ?? 'alguém',
+      confirmados: sql.presencasDe.all(e.id).map((p) => p.conta),
     };
   }
   function perfisDo(id) {
@@ -725,6 +764,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         servidores: servidores.map(resumoServidor),
         iceServers: ICE_SERVERS,
         versao: VERSAO,
+        // eventos que eu confirmei (de todos os servidores), pros lembretes
+        eventos: sql.meusEventos.all(conta.id, Date.now() - DURA_EVENTO).map(eventoPublico),
         voz,
       });
       emitirPresenca();
@@ -792,6 +833,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       sql.apagarMembros.run(s.id);
       sql.apagarServidor.run(s.id);
       sql.apagarSonsDo.run(s.id);
+      sql.apagarEventosDo.run(s.id);
       io.to(sala(s.id)).emit('servidor:removido', { id: s.id, nome: s.nome });
       io.in(sala(s.id)).socketsLeave(sala(s.id));
       for (const o of usuarios.values()) if (o.servidor === s.id) o.servidor = null;
@@ -1111,6 +1153,43 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         sql.reagir.run(m.id, u.conta, emoji);
       }
       emitirNoCanal(c, 'msg:atualizada', msgPublica(sql.mensagem.get(m.id), c.servidor));
+      ack({});
+    });
+
+    // ---------- eventos agendados ----------
+    quando('evento:criar', (u, { servidor: srv, titulo, descricao, inicio, canal } = {}, ack) => {
+      srv = Number(srv);
+      if (!ehMembro(srv, u.conta)) return ack({ erro: 'Você não está nesse servidor' });
+      if (sql.contarEventos.get(srv, Date.now() - DURA_EVENTO).n >= MAX_EVENTOS) return ack({ erro: 'Muitos eventos marcados nesse servidor' });
+      titulo = limparLinha(titulo, 80);
+      if (!titulo) return ack({ erro: 'Dá um nome pro evento' });
+      descricao = String(descricao ?? '').replace(/[^\P{C}\n]/gu, '').trim().slice(0, 500);
+      inicio = Number(inicio);
+      if (!Number.isFinite(inicio) || inicio < Date.now() - 60_000) return ack({ erro: 'Escolhe uma data e hora no futuro' });
+      if (inicio > Date.now() + 366 * 24 * 3600 * 1000) return ack({ erro: 'No máximo daqui a um ano' });
+      const salaVoz = canal ? sql.canal.get(Number(canal)) : null;
+      const canalOk = salaVoz && salaVoz.servidor === srv && salaVoz.tipo === 'voz' ? salaVoz.id : null;
+      const { lastInsertRowid } = sql.criarEvento.run(srv, titulo, descricao, Math.round(inicio), canalOk, u.conta, Date.now());
+      sql.confirmar.run(Number(lastInsertRowid), u.conta); // quem cria já vai
+      emitirServidor(srv);
+      io.to(sala(srv)).emit('evento:novo', eventoPublico(sql.evento.get(Number(lastInsertRowid))));
+      ack({ id: Number(lastInsertRowid) });
+    });
+    quando('evento:confirmar', (u, id, ack) => {
+      const e = sql.evento.get(Number(id));
+      if (!e || !ehMembro(e.servidor, u.conta)) return ack({ erro: 'Evento não encontrado' });
+      if (sql.temPresenca.get(e.id, u.conta)) sql.desconfirmar.run(e.id, u.conta);
+      else sql.confirmar.run(e.id, u.conta);
+      emitirServidor(e.servidor);
+      ack({});
+    });
+    quando('evento:apagar', (u, id, ack) => {
+      const e = sql.evento.get(Number(id));
+      if (!e) return ack({});
+      if (e.conta !== u.conta && !ehAdminDe(e.servidor, u.conta)) return ack({ erro: 'Só quem criou ou um admin pode cancelar' });
+      sql.apagarPresencas.run(e.id);
+      sql.apagarEvento.run(e.id);
+      emitirServidor(e.servidor);
       ack({});
     });
 

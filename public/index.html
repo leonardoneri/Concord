@@ -54,6 +54,7 @@
       </header>
 
       <div class="lista-canais">
+        <button type="button" class="linha-eventos" id="btn-eventos"><span data-icone="calendario"></span><span id="texto-eventos">Eventos</span><span class="badge-eventos" id="badge-eventos" hidden></span></button>
         <div class="categoria" data-lista="canais-texto"><span data-icone="seta"></span><span class="titulo-cat">Canais de texto</span><button class="btn-add-canal so-admin" data-tipo="texto" title="Criar canal de texto" hidden>+</button></div>
         <ul id="canais-texto"></ul>
         <div class="categoria" data-lista="canais-voz"><span data-icone="seta"></span><span class="titulo-cat">Canais de voz</span><button class="btn-add-canal so-admin" data-tipo="voz" title="Criar canal de voz" hidden>+</button></div>
@@ -391,6 +392,29 @@
     <button type="button" class="menu-botao" id="btn-novo-som">+ Adicionar som do servidor</button>
   </div>
   <div id="previa-tela" hidden></div>
+
+  <div id="modal-eventos" class="modal" hidden>
+    <div class="modal-caixa modal-eventos">
+      <header>
+        <h2>Eventos</h2>
+        <button class="btn-icone" id="btn-fechar-eventos" title="Fechar" data-icone="fechar"></button>
+      </header>
+      <div id="lista-eventos"></div>
+      <button type="button" class="btn-primario" id="btn-novo-evento">Marcar evento</button>
+      <form id="form-evento" hidden>
+        <label>Nome do evento<input id="evento-titulo" maxlength="80" placeholder="Ex.: CS 5x5, campeonato de LoL…" required autocomplete="off"></label>
+        <div class="linha-evento">
+          <label>Quando<input type="datetime-local" id="evento-inicio" required></label>
+          <label>Sala de voz<select id="evento-canal"></select></label>
+        </div>
+        <label>Detalhes (opcional)<textarea id="evento-descricao" maxlength="500" rows="2" placeholder="Ex.: quem perder paga o lanche"></textarea></label>
+        <div class="acoes-som">
+          <button type="button" class="btn-secundario" id="btn-cancelar-evento">Cancelar</button>
+          <button class="btn-primario">Marcar</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <div id="modal-novidades" class="modal" hidden>
     <div class="modal-caixa modal-novidades">
