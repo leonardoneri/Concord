@@ -1304,6 +1304,10 @@ $$('.btn-surdo').forEach((b) => (b.onclick = alternarSurdo));
 $$('.btn-camera').forEach((b) => (b.onclick = alternarCamera));
 $$('.btn-tela').forEach((b) => (b.onclick = alternarTela));
 $$('.btn-sair-voz').forEach((b) => (b.onclick = () => sairVoz()));
+$('#btn-tira').onclick = () => {
+  tiraVisivel = !tiraVisivel;
+  renderGrid();
+};
 
 document.addEventListener('keydown', (e) => {
   if (!estado.eu || !e.ctrlKey || !e.shiftKey) return;
@@ -1322,8 +1326,33 @@ function aplicarSaida(midia) {
   }
 }
 
+// Palco: o vídeo em destaque (normalmente a transmissão) fica grande em cima,
+// e o resto das pessoas numa faixa de miniaturas embaixo, sem cobrir o vídeo.
+// foco = null (automático) | chave do tile escolhido | false (sem destaque)
+let foco = null;
+let telasAntes = new Set();
+let tiraVisivel = true;
+
+function escolherDestaque(desejados) {
+  const telas = desejados.filter((d) => d.tipo === 'tela');
+  // alguém começou a transmitir: volta pro automático pra mostrar a tela nova
+  if (telas.some((d) => !telasAntes.has(d.chave))) foco = null;
+  telasAntes = new Set(telas.map((d) => d.chave));
+  if (foco === false) return null;
+  if (foco && desejados.some((d) => d.chave === foco)) return foco;
+  foco = null;
+  return (telas.find((d) => !d.local) ?? telas[0])?.chave ?? null;
+}
+
+function focarTile(chave) {
+  foco = $('#palco').firstElementChild?.dataset.chave === chave ? false : chave;
+  renderGrid();
+}
+
 function renderGrid() {
   const grid = $('#grid');
+  const palco = $('#palco');
+  const tira = $('#tira');
   const desejados = [];
 
   if (estado.voz) {
@@ -1340,14 +1369,34 @@ function renderGrid() {
     }
   }
 
-  const existentes = new Map([...grid.children].map((t) => [t.dataset.chave, t]));
+  const destaque = escolherDestaque(desejados);
+  grid.classList.toggle('foco', !!destaque);
+  grid.classList.toggle('sem-tira', !!destaque && !tiraVisivel);
+  $('#btn-tira').hidden = !destaque;
+  $('#btn-tira').title = tiraVisivel ? 'Esconder participantes' : 'Mostrar participantes';
+  $('#btn-tira').classList.toggle('desligado', !tiraVisivel);
+
+  const existentes = new Map([...grid.querySelectorAll('.tile')].map((t) => [t.dataset.chave, t]));
   for (const d of desejados) {
     let tile = existentes.get(d.chave);
     if (tile) existentes.delete(d.chave);
-    else grid.append((tile = criarTile(d)));
+    else tile = criarTile(d);
+    const lugar = d.chave === destaque ? palco : tira;
+    if (tile.parentElement !== lugar) {
+      lugar.append(tile);
+      // mover o <video> no DOM pausa ele
+      const video = tile.querySelector('video');
+      if (video.srcObject) video.play().catch(() => {});
+    }
+    tile.classList.toggle('em-destaque', d.chave === destaque);
     atualizarTile(tile, d);
   }
   for (const t of existentes.values()) t.remove();
+  // mantém a ordem estável na faixa
+  desejados.filter((d) => d.chave !== destaque).forEach((d) => {
+    const t = tira.querySelector(`[data-chave="${d.chave}"]`);
+    if (t && t !== tira.lastElementChild) tira.append(t);
+  });
 
   atualizarAudios();
 }
@@ -1386,6 +1435,7 @@ function criarTile(d) {
   rotulo.append(cheia);
 
   tile.ondblclick = () => telaCheia(tile);
+  tile.onclick = (e) => { if (!e.target.closest('input, button')) focarTile(d.chave); };
   if (!d.local) tile.oncontextmenu = (e) => abrirMenuPessoa(d.u.id, e);
   return tile;
 }

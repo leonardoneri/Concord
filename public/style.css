@@ -498,13 +498,46 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
 
 #grid {
   flex: 1;
+  min-height: 0;
+  padding: 16px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* sem ninguém transmitindo: todo mundo em grade */
+#palco { display: none; }
+#tira {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 16px;
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   align-content: center;
 }
+#tira .tile.tela { grid-column: 1 / -1; max-height: 72vh; }
+
+/* com destaque: vídeo grande em cima, pessoas numa faixa embaixo */
+#grid.foco #palco { display: flex; flex: 1; min-height: 0; }
+#grid.foco #tira {
+  flex: none;
+  height: clamp(72px, 17vh, 150px);
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+#grid.foco.sem-tira #tira { display: none; }
+#palco .tile { flex: 1; aspect-ratio: auto; max-height: none; width: 100%; height: 100%; }
+#palco .tile video { object-fit: contain; }
+#grid.foco #tira .tile { height: 100%; flex: none; max-height: none; }
+#grid.foco #tira .tile .capa .avatar { width: 44px; height: 44px; font-size: 18px; }
+#grid.foco #tira .rotulo { left: 4px; bottom: 4px; right: 4px; }
+#grid.foco #tira .nome-tile { font-size: 12px; padding: 1px 6px; max-width: 100%; overflow: hidden; white-space: nowrap; }
+#grid.foco #tira .rotulo input[type=range], #grid.foco #tira .btn-cheia { display: none; }
+.tile { cursor: pointer; }
+#btn-tira.desligado { color: var(--texto-2); }
 
 .tile {
   position: relative;
@@ -524,7 +557,6 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
   transition: box-shadow .1s;
 }
 .tile.falando::after { box-shadow: inset 0 0 0 3px var(--verde); }
-.tile.tela { grid-column: 1 / -1; max-height: 72vh; }
 
 .tile video {
   position: absolute;
