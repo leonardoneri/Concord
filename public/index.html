@@ -158,84 +158,115 @@
   </div>
 
   <div id="modal-config" class="modal" hidden>
-    <div class="modal-caixa">
-      <header>
-        <h2>Configurações</h2>
-        <button class="btn-icone" id="btn-fechar-config" title="Fechar" data-icone="fechar"></button>
-      </header>
-      <label>Nome de exibição
-        <div class="linha-copiar">
-          <input id="cfg-nome" maxlength="32" autocomplete="off">
-          <button type="button" class="btn-primario" id="btn-salvar-nome">Salvar</button>
-        </div>
-      </label>
-      <p class="dica-cfg" id="cfg-usuario"></p>
-      <div class="cfg-perfil">
-        <div class="cfg-foto">
-          <span id="cfg-avatar"></span>
-          <div class="cfg-foto-botoes">
-            <button type="button" class="btn-secundario" id="btn-trocar-foto">Trocar foto</button>
-            <button type="button" class="btn-link" id="btn-remover-foto">Remover</button>
-            <input type="file" id="input-foto" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-          </div>
-        </div>
-        <label>Cor do nome
-          <div class="linha-cor">
-            <input type="color" id="cfg-cor">
-            <button type="button" class="btn-link" id="btn-cor-padrao">Usar cor automática</button>
+    <div class="modal-caixa modal-config">
+      <nav class="cfg-abas">
+        <div class="cfg-abas-titulo">Usuário</div>
+        <button type="button" data-aba="conta">Minha conta</button>
+        <button type="button" data-aba="perfil">Perfil</button>
+        <div class="cfg-abas-titulo">App</div>
+        <button type="button" data-aba="voz">Voz e vídeo</button>
+        <button type="button" data-aba="transmissao">Transmissão</button>
+        <button type="button" data-aba="atalhos">Atalhos</button>
+        <button type="button" data-aba="sobre">Sobre e novidades</button>
+        <hr>
+        <button type="button" class="perigo" id="btn-sair-conta">Sair da conta</button>
+        <p class="cfg-versao" id="cfg-versao"></p>
+      </nav>
+      <div class="cfg-conteudo">
+        <header>
+          <h2 id="cfg-titulo">Minha conta</h2>
+          <button class="btn-icone" id="btn-fechar-config" title="Fechar" data-icone="fechar"></button>
+        </header>
+        <section data-aba="conta">
+        <label>Nome de exibição
+          <div class="linha-copiar">
+            <input id="cfg-nome" maxlength="32" autocomplete="off">
+            <button type="button" class="btn-primario" id="btn-salvar-nome">Salvar</button>
           </div>
         </label>
-        <label>Sobre mim
-          <textarea id="cfg-bio" maxlength="190" rows="3" placeholder="Conta um pouco sobre você (jogos, horários…)"></textarea>
-        </label>
-        <button type="button" class="btn-primario" id="btn-salvar-perfil">Salvar perfil</button>
-      </div>
-      <label>Dispositivo de entrada (microfone)<select id="cfg-mic"></select></label>
-      <label>Dispositivo de saída<select id="cfg-saida"></select></label>
-      <label>Câmera<select id="cfg-cam"></select></label>
-      <div class="linha-cfg">
-        <label>Qualidade da tela
-          <select id="cfg-resolucao">
-            <option value="720">720p</option>
-            <option value="1080">1080p</option>
-            <option value="original">Original (1440p/4K)</option>
+        <p class="dica-cfg" id="cfg-usuario"></p>
+        </section>
+        <section data-aba="perfil" hidden>
+        <div class="cfg-perfil">
+          <div class="cfg-foto">
+            <span id="cfg-avatar"></span>
+            <div class="cfg-foto-botoes">
+              <button type="button" class="btn-secundario" id="btn-trocar-foto">Trocar foto</button>
+              <button type="button" class="btn-link" id="btn-remover-foto">Remover</button>
+              <input type="file" id="input-foto" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+            </div>
+          </div>
+          <label>Cor do nome
+            <div class="linha-cor">
+              <input type="color" id="cfg-cor">
+              <button type="button" class="btn-link" id="btn-cor-padrao">Usar cor automática</button>
+            </div>
+          </label>
+          <label>Sobre mim
+            <textarea id="cfg-bio" maxlength="190" rows="3" placeholder="Conta um pouco sobre você (jogos, horários…)"></textarea>
+          </label>
+          <button type="button" class="btn-primario" id="btn-salvar-perfil">Salvar perfil</button>
+        </div>
+        </section>
+        <section data-aba="voz" hidden>
+        <label>Dispositivo de entrada (microfone)<select id="cfg-mic"></select></label>
+        <label>Dispositivo de saída<select id="cfg-saida"></select></label>
+        <label>Câmera<select id="cfg-cam"></select></label>
+        <label>Supressão de ruído
+          <select id="cfg-ruido">
+            <option value="padrao">Normal</option>
+            <option value="forte">Forte (tira teclado, ventilador, barulho de fundo)</option>
+            <option value="desligado">Desligada</option>
           </select>
         </label>
-        <label>FPS da tela
-          <select id="cfg-fps">
-            <option value="30">30 fps</option>
-            <option value="60">60 fps</option>
+        <label>Modo de entrada
+          <select id="cfg-modo">
+            <option value="voz">Detecção de voz (microfone aberto)</option>
+            <option value="ptt">Apertar pra falar</option>
           </select>
         </label>
-      </div>
-      <p class="dica-cfg">Mais qualidade e fps gastam mais internet de quem transmite. Dá pra trocar no meio da transmissão.</p>
-      <h3 class="cfg-secao">Voz e atalhos</h3>
-      <label>Supressão de ruído
-        <select id="cfg-ruido">
-          <option value="padrao">Normal</option>
-          <option value="forte">Forte (tira teclado, ventilador, barulho de fundo)</option>
-          <option value="desligado">Desligada</option>
-        </select>
-      </label>
-      <label>Modo de entrada
-        <select id="cfg-modo">
-          <option value="voz">Detecção de voz (microfone aberto)</option>
-          <option value="ptt">Apertar pra falar</option>
-        </select>
-      </label>
-      <label id="linha-ptt">Tecla do apertar pra falar
-        <button type="button" class="btn-tecla" data-atalho="ptt"></button>
-      </label>
-      <div class="linha-cfg">
-        <label>Silenciar
-          <button type="button" class="btn-tecla" data-atalho="mudo"></button>
+        <label id="linha-ptt">Tecla do apertar pra falar
+          <button type="button" class="btn-tecla" data-atalho="ptt"></button>
         </label>
-        <label>Desativar áudio
-          <button type="button" class="btn-tecla" data-atalho="surdo"></button>
-        </label>
+        </section>
+        <section data-aba="transmissao" hidden>
+        <div class="linha-cfg">
+          <label>Qualidade da tela
+            <select id="cfg-resolucao">
+              <option value="720">720p</option>
+              <option value="1080">1080p</option>
+              <option value="original">Original (1440p/4K)</option>
+            </select>
+          </label>
+          <label>FPS da tela
+            <select id="cfg-fps">
+              <option value="30">30 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </label>
+        </div>
+        <p class="dica-cfg">Mais qualidade e fps gastam mais internet de quem transmite. Dá pra trocar no meio da transmissão.</p>
+        </section>
+        <section data-aba="atalhos" hidden>
+        <div class="linha-cfg">
+          <label>Silenciar
+            <button type="button" class="btn-tecla" data-atalho="mudo"></button>
+          </label>
+          <label>Desativar áudio
+            <button type="button" class="btn-tecla" data-atalho="surdo"></button>
+          </label>
+        </div>
+        <p class="dica-cfg">Clique no botão e aperte a tecla (vale botão lateral do mouse no apertar pra falar). Backspace limpa. No app desktop os atalhos funcionam até dentro do jogo; no navegador, só com a aba em foco.</p>
+        </section>
+        <section data-aba="sobre" hidden>
+          <div class="cfg-versoes">
+            <div><span>App desktop</span><b id="ver-app"></b></div>
+            <div><span>Servidor</span><b id="ver-servidor"></b></div>
+          </div>
+          <p class="dica-cfg" id="ver-atualizacao" hidden></p>
+          <button type="button" class="btn-secundario" id="btn-ver-novidades">Ver novidades</button>
+        </section>
       </div>
-      <p class="dica-cfg">Clique no botão e aperte a tecla (vale botão lateral do mouse no apertar pra falar). Backspace limpa. No app desktop os atalhos funcionam até dentro do jogo; no navegador, só com a aba em foco.</p>
-      <button type="button" class="btn-link" id="btn-sair-conta">Sair da conta</button>
     </div>
   </div>
 
@@ -304,6 +335,17 @@
   </div>
   <div id="menu-pessoa" class="popover" hidden></div>
   <div id="previa-tela" hidden></div>
+
+  <div id="modal-novidades" class="modal" hidden>
+    <div class="modal-caixa modal-novidades">
+      <header>
+        <h2>Novidades do Concord 🎉</h2>
+        <button class="btn-icone" id="btn-fechar-novidades" title="Fechar" data-icone="fechar"></button>
+      </header>
+      <div id="lista-novidades"></div>
+      <button type="button" class="btn-primario" id="btn-ok-novidades">Bora!</button>
+    </div>
+  </div>
 
   <div id="modal-convite" class="modal" hidden>
     <div class="modal-caixa">

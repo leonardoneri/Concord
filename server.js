@@ -34,6 +34,7 @@ function montarIceServers(turn) {
 }
 
 const raiz = path.dirname(fileURLToPath(import.meta.url));
+const VERSAO = JSON.parse(fs.readFileSync(path.join(raiz, 'package.json'), 'utf8')).version;
 
 function corDoNome(nome) {
   let h = 0;
@@ -629,6 +630,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         prefs: JSON.parse(conta.prefs),
         servidores: servidores.map(resumoServidor),
         iceServers: ICE_SERVERS,
+        versao: VERSAO,
       });
       emitirPresenca();
     });

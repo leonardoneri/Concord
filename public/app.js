@@ -70,6 +70,14 @@ const SEM_SERVIDOR = { id: null, nome: '', icone: null, dono: null, convite: '',
 const DM = { id: 'dm', nome: 'Mensagens diretas', icone: null, dono: null, convite: '', canais: [] };
 const PAGINA = 50; // mensagens por vez no histórico (igual ao servidor)
 const MAX_ARQUIVO = 25 * 1024 * 1024;
+// o app desktop põe "Concord/1.0.8" no user agent (vale até nas versões antigas do app)
+const VERSAO_APP = navigator.userAgent.match(/concord\/(\d+\.\d+\.\d+)/i)?.[1] ?? null;
+function compararVersao(a, b) {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+}
 const STATUS_NOME = { online: 'Online', ausente: 'Ausente', ocupado: 'Não perturbe', invisivel: 'Invisível' };
 const estado = {
   eu: null,
@@ -201,8 +209,10 @@ window.addEventListener('blur', () => { if (!pttGlobal) apertarPtt(false); });
 // ---------- desktop ----------
 
 // Atualização do app já baixada: aparece o botão verde (igual o Discord); clicar reinicia atualizado
+let atualizacaoPronta = null;
 function mostrarAtualizacao(info) {
   if (!info) return;
+  atualizacaoPronta = info;
   const b = $('#btn-atualizar');
   b.hidden = false;
   b.title = `Atualização pronta (versão ${info.versao}): clique pra reiniciar e atualizar`;
@@ -349,6 +359,7 @@ $('#form-login').addEventListener('submit', (e) => {
     }
     token = res.token;
     salvarStorage('token', token);
+    contaNova = modoLogin === 'criar';
     $('#senha').value = '';
     // criou a conta com o convite: já está no servidor, não precisa entrar de novo
     if (modoLogin === 'criar' && $('#convite').value === conviteDaUrl()) esquecerConviteDaUrl();
@@ -357,6 +368,7 @@ $('#form-login').addEventListener('submit', (e) => {
   });
 });
 
+let contaNova = false; // acabou de criar a conta: não mostra novidades
 function entrar() {
   socket.emit('entrar', { token }, (res) => {
     if (res.erro) {
@@ -371,11 +383,13 @@ function entrar() {
     estado.eu = { id: res.id, conta: res.conta, nome: res.nome, usuario: res.usuario, status: res.status ?? 'online', statusTexto: res.statusTexto ?? '' };
     estado.servidores = res.servidores;
     estado.iceServers = res.iceServers;
+    estado.versao = res.versao ?? null;
     if (primeiraVez) aplicarPrefs(res.prefs);
     $('#login').hidden = true;
     $('#app').hidden = false;
     $('#meu-nome').textContent = res.nome;
     if (primeiraVez && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    if (primeiraVez) setTimeout(() => mostrarNovidades(), 800);
     const convite = conviteDaUrl();
     if (convite) {
       esquecerConviteDaUrl();
@@ -2509,9 +2523,67 @@ function miniaturas(ligar) {
   previaEnvio = setInterval(enviarMiniatura, 10_000);
 }
 
+// ---------- novidades da versão ----------
+// Mostra uma vez o que entrou desde a última versão que a pessoa viu (forcar = botão "Ver novidades")
+async function mostrarNovidades(forcar = false) {
+  const atual = estado.versao;
+  if (!atual) return;
+  const vista = lerStorage('versaoVista', null);
+  if (!forcar && (contaNova || (vista && compararVersao(atual, vista) <= 0))) return salvarStorage('versaoVista', atual);
+  let lista;
+  try {
+    lista = await (await fetch('novidades.json', { cache: 'no-cache' })).json();
+  } catch {
+    return;
+  }
+  lista = lista.filter((n) => compararVersao(n.versao, atual) <= 0);
+  if (forcar) lista = lista.slice(0, 5);
+  else if (vista) lista = lista.filter((n) => compararVersao(n.versao, vista) > 0);
+  else lista = lista.slice(0, 1); // nunca viu: só a mais recente
+  salvarStorage('versaoVista', atual);
+  if (!lista.length) return;
+  $('#lista-novidades').replaceChildren(...lista.map((n) => {
+    const bloco = el('div', 'novidade-versao');
+    const lis = n.itens.map((t) => el('li', null, t));
+    const ul = el('ul');
+    ul.append(...lis);
+    bloco.append(el('h3', null, `Versão ${n.versao}`), ul);
+    return bloco;
+  }));
+  $('#modal-novidades').hidden = false;
+}
+const fecharNovidades = () => ($('#modal-novidades').hidden = true);
+$('#btn-ok-novidades').onclick = fecharNovidades;
+$('#btn-fechar-novidades').onclick = fecharNovidades;
+$('#modal-novidades').onclick = (e) => { if (e.target.id === 'modal-novidades') fecharNovidades(); };
+
 // ---------- configurações ----------
-async function abrirConfig() {
+const TITULOS_ABA = {
+  conta: 'Minha conta', perfil: 'Perfil', voz: 'Voz e vídeo', transmissao: 'Transmissão de tela', atalhos: 'Atalhos', sobre: 'Sobre o Concord',
+};
+function abrirAba(aba) {
+  $$('.cfg-abas [data-aba]').forEach((b) => b.classList.toggle('ativa', b.dataset.aba === aba));
+  $$('.cfg-conteudo section[data-aba]').forEach((s) => (s.hidden = s.dataset.aba !== aba));
+  $('#cfg-titulo').textContent = TITULOS_ABA[aba];
+  capturando = null;
+  renderAtalhos();
+}
+$$('.cfg-abas [data-aba]').forEach((b) => (b.onclick = () => abrirAba(b.dataset.aba)));
+
+function preencherSobre() {
+  $('#ver-app').textContent = VERSAO_APP ?? 'não está usando (navegador)';
+  $('#ver-servidor').textContent = estado.versao ?? '?';
+  $('#cfg-versao').textContent = VERSAO_APP ? `Concord ${VERSAO_APP}` : estado.versao ? `Concord web ${estado.versao}` : '';
+  const aviso = $('#ver-atualizacao');
+  aviso.hidden = !atualizacaoPronta;
+  if (atualizacaoPronta) aviso.textContent = `A versão ${atualizacaoPronta.versao} já foi baixada: clique no botão verde da barra da esquerda pra reiniciar e atualizar.`;
+}
+$('#btn-ver-novidades').onclick = () => mostrarNovidades(true);
+
+async function abrirConfig(aba = 'conta') {
   $('#modal-config').hidden = false;
+  abrirAba(aba);
+  preencherSobre();
   preencherPerfil();
   const lista = (await navigator.mediaDevices?.enumerateDevices()) ?? [];
   const preencher = (sel, tipo, chave) => {
@@ -2530,8 +2602,6 @@ async function abrirConfig() {
   $('#cfg-resolucao').value = qualidadeTela() === QUALIDADES[transmissao.resolucao] ? transmissao.resolucao : '1080';
   $('#cfg-fps').value = String(fpsTela());
   $('#cfg-ruido').value = dispositivos.ruido ?? 'padrao';
-  capturando = null;
-  renderAtalhos();
 }
 
 // ---------- atalhos nas configurações ----------
@@ -2628,7 +2698,7 @@ $('#status-texto').onkeydown = (e) => {
 };
 $('#ms-editar-perfil').onclick = () => {
   fecharPopovers();
-  abrirConfig();
+  abrirConfig('perfil');
 };
 
 // ---------- perfil (foto, cor, sobre mim) ----------
@@ -2725,7 +2795,7 @@ function abrirPerfil(nome, evento) {
   const acoes = el('div', 'perfil-acoes');
   if (p && p.id === estado.eu?.conta) {
     const b = el('button', 'btn-secundario', 'Editar perfil');
-    b.onclick = () => { fecharPopovers(); abrirConfig(); };
+    b.onclick = () => { fecharPopovers(); abrirConfig('perfil'); };
     acoes.append(b);
   } else if (p) {
     const msg = el('button', 'btn-primario', 'Mandar mensagem');
@@ -2988,7 +3058,7 @@ $('#cfg-cam').onchange = async (e) => {
   render();
 };
 
-$('#btn-config').onclick = abrirConfig;
+$('#btn-config').onclick = () => abrirConfig();
 $('#btn-fechar-config').onclick = () => ($('#modal-config').hidden = true);
 $('#modal-config').onclick = (e) => { if (e.target.id === 'modal-config') e.target.hidden = true; };
 document.addEventListener('keydown', (e) => {

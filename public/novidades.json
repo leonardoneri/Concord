@@ -1,0 +1,30 @@
+[
+  {
+    "versao": "1.0.9",
+    "itens": [
+      "Configurações organizadas em abas: Minha conta, Perfil, Voz e vídeo, Transmissão, Atalhos e Sobre",
+      "A versão do app aparece em Configurações → Sobre",
+      "Esta janela, mostrando o que mudou a cada atualização"
+    ]
+  },
+  {
+    "versao": "1.0.8",
+    "itens": [
+      "Quem transmite a tela com som não manda mais a voz da chamada junto (ninguém se ouve de volta)",
+      "Não dá mais pra pôr a sua própria transmissão em tela cheia (virava espelho infinito)"
+    ]
+  },
+  {
+    "versao": "1.0.7",
+    "itens": [
+      "Responder mensagens e reagir com emoji",
+      "@menções: digite @ pra marcar alguém (ou @todos)",
+      "Mensagens diretas: no perfil de alguém, \"Mandar mensagem\"",
+      "Busca de mensagens (Ctrl+F) e histórico infinito ao rolar pra cima",
+      "Enviar qualquer arquivo até 25 MB (vídeos tocam direto no chat)",
+      "Status: ausente, não perturbe, invisível e texto tipo \"Jogando CS2\"",
+      "Apertar pra falar e atalhos configuráveis, funcionando até dentro do jogo",
+      "Supressão de ruído forte (tira teclado e ventilador)"
+    ]
+  }
+]
