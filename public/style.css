@@ -1335,3 +1335,26 @@ textarea {
 .info-voz .conectado.rede-media { color: #f0b232; }
 .info-voz .conectado.rede-ruim { color: var(--vermelho); }
 .info-voz .conectado { cursor: help; }
+
+/* ---------- enquetes ---------- */
+.enquete { display: grid; gap: 6px; max-width: 460px; margin-top: 4px; padding: 12px; border-radius: 8px; background: var(--sidebar); border: 1px solid #ffffff10; }
+.enquete-pergunta { font-weight: 600; color: var(--forte); font-size: 15px; }
+.enquete-info { font-size: 12px; color: var(--texto-2); margin-bottom: 2px; }
+.enquete-opcao {
+  position: relative; display: flex; align-items: center; gap: 8px; overflow: hidden;
+  padding: 8px 10px; border: 1px solid #ffffff14; border-radius: 6px; background: #0002;
+  color: var(--texto); font: inherit; font-size: 14px; cursor: pointer; text-align: left;
+}
+.enquete-opcao:hover { border-color: #ffffff30; }
+.enquete-barra { position: absolute; inset: 0 auto 0 0; background: #5865f233; transition: width .3s; }
+.enquete-opcao.lider .enquete-barra { background: #5865f255; }
+.enquete-opcao.votada { border-color: var(--acento); }
+.enquete-marca, .enquete-texto, .enquete-pct { position: relative; }
+.enquete-marca { width: 14px; color: var(--acento); font-weight: 700; }
+.enquete-texto { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.enquete-pct { font-size: 12px; color: var(--texto-2); white-space: nowrap; }
+#painel-enquete { position: fixed; width: min(380px, calc(100vw - 16px)); padding: 14px; display: grid; gap: 8px; }
+#painel-enquete h3 { margin: 0 0 2px; font-size: 16px; color: var(--forte); }
+#enquete-opcoes { display: grid; gap: 6px; }
+.linha-check { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--texto-2); cursor: pointer; }
+.linha-check input { width: auto; margin: 0; }

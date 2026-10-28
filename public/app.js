@@ -35,6 +35,7 @@ const ICONES = {
   desligar: '<path fill="currentColor" d="M3 15.5c5-5 13-5 18 0l-2.5 2.5-3.2-1.6v-2.8a10 10 0 0 0-6.6 0v2.8L5.5 18z"/>',
   config: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   jogo: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><rect x="2" y="6" width="20" height="12" rx="4"/>',
+  enquete: '<path d="M3 3v18h18"/><path d="M7 16v-4M12 16V8M17 16v-7"/>',
   tv: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/>',
   sons: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
   volume: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>',
@@ -1390,6 +1391,7 @@ function linhaReacoes(m) {
 }
 
 function corpoMensagem(m) {
+  if (m.enquete) return cartaoEnquete(m);
   const corpo = formatarTexto(m.texto);
   if (m.editado_em) {
     const tag = el('span', 'editada', ' (editada)');
@@ -1411,7 +1413,7 @@ function acoesMensagem(m) {
   };
   botao('emoji', 'Reagir', (e) => abrirSeletorEmoji(m, e));
   botao('responder', 'Responder', () => responder(m));
-  if (minha && !ehUpload(m.texto)) botao('lapis', 'Editar', () => iniciarEdicao(m));
+  if (minha && !ehUpload(m.texto) && !m.enquete) botao('lapis', 'Editar', () => iniciarEdicao(m));
   if (souAdmin() || emDm()) botao('pino', m.fixada ? 'Desafixar' : 'Fixar', () => fixarMensagem(m, !m.fixada));
   if (minha || souAdmin()) botao('lixo', 'Apagar (Shift+clique apaga sem perguntar)', (e) => apagarMensagem(m, e));
   const caixa = el('div', 'acoes-msg');
@@ -3525,6 +3527,76 @@ function renderRede() {
   info.classList.toggle('rede-ruim', n === 'ruim');
   info.title = peers.size ? textoRede(r) : 'Sozinho na sala';
 }
+
+// ---------- enquetes ----------
+function cartaoEnquete(m) {
+  const e = m.enquete;
+  const cartao = el('div', 'enquete');
+  cartao.append(el('div', 'enquete-pergunta', e.pergunta));
+  const pessoas = new Set(e.opcoes.flatMap((o) => o.contas));
+  cartao.append(el('div', 'enquete-info', `${e.multipla ? 'Pode escolher várias' : 'Escolha uma'} · ${pessoas.size} ${pessoas.size === 1 ? 'pessoa votou' : 'pessoas votaram'}`));
+  const maior = Math.max(1, ...e.opcoes.map((o) => o.contas.length));
+  e.opcoes.forEach((o, i) => {
+    const meu = o.contas.includes(estado.eu?.conta);
+    const b = el('button', `enquete-opcao${meu ? ' votada' : ''}${o.contas.length === maior && o.contas.length ? ' lider' : ''}`);
+    b.type = 'button';
+    const pct = pessoas.size ? Math.round((o.contas.length / pessoas.size) * 100) : 0;
+    const barra = el('span', 'enquete-barra');
+    barra.style.width = `${pct}%`;
+    b.append(barra, el('span', 'enquete-marca', meu ? '✓' : ''), el('span', 'enquete-texto', o.texto), el('span', 'enquete-pct', `${o.contas.length} · ${pct}%`));
+    b.title = o.contas.length ? `Votaram: ${o.contas.map((c) => perfilPorConta(c)?.nome ?? 'alguém').join(', ')}` : 'Ninguém votou ainda';
+    b.onclick = () => socket.emit('enquete:votar', { id: m.id, opcao: i }, (r) => r?.erro && avisar(r.erro));
+    cartao.append(b);
+  });
+  return cartao;
+}
+
+function linhaOpcao(valor = '') {
+  const i = el('input');
+  i.maxLength = 80;
+  i.placeholder = `Opção ${$('#enquete-opcoes').children.length + 1}`;
+  i.value = valor;
+  i.autocomplete = 'off';
+  return i;
+}
+$('#btn-enquete').onclick = (e) => {
+  e.stopPropagation();
+  const painel = $('#painel-enquete');
+  if (!painel.hidden) return fecharPopovers();
+  fecharPopovers();
+  painel.reset();
+  $('#enquete-opcoes').replaceChildren();
+  $('#enquete-opcoes').append(linhaOpcao(), linhaOpcao());
+  painel.hidden = false;
+  const r = $('#btn-enquete').getBoundingClientRect();
+  painel.style.left = `${Math.max(8, r.left - 8)}px`;
+  painel.style.top = `${Math.max(8, r.top - painel.getBoundingClientRect().height - 12)}px`;
+  $('#enquete-pergunta').focus();
+};
+$('#btn-mais-opcao').onclick = (e) => {
+  e.stopPropagation();
+  if ($('#enquete-opcoes').children.length >= 10) return avisar('No máximo 10 opções.');
+  const i = linhaOpcao();
+  $('#enquete-opcoes').append(i);
+  i.focus();
+  const painel = $('#painel-enquete');
+  painel.style.top = `${Math.max(8, parseFloat(painel.style.top) - i.getBoundingClientRect().height - 6)}px`;
+};
+$('#btn-cancelar-enquete').onclick = fecharPopovers;
+$('#painel-enquete').onsubmit = (e) => {
+  e.preventDefault();
+  const opcoes = [...$('#enquete-opcoes').children].map((i) => i.value.trim()).filter(Boolean);
+  if (opcoes.length < 2) return avisar('Coloca pelo menos 2 opções.');
+  socket.emit('enquete:criar', {
+    canal: estado.canalTexto,
+    pergunta: $('#enquete-pergunta').value,
+    opcoes,
+    multipla: $('#enquete-multipla').checked,
+  }, (r) => {
+    if (r?.erro) return avisar(r.erro);
+    fecharPopovers();
+  });
+};
 
 function fecharPopovers() {
   $$('.popover').forEach((e) => (e.hidden = true));

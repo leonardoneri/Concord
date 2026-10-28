@@ -206,6 +206,12 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       entrou_em INTEGER NOT NULL,
       PRIMARY KEY (servidor, conta)
     );
+    CREATE TABLE IF NOT EXISTS votos (
+      mensagem INTEGER NOT NULL,
+      conta INTEGER NOT NULL,
+      opcao INTEGER NOT NULL,
+      PRIMARY KEY (mensagem, conta, opcao)
+    );
     CREATE TABLE IF NOT EXISTS sons (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       servidor INTEGER NOT NULL,
@@ -228,7 +234,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       nome: 'TEXT', cor: 'TEXT', avatar: 'TEXT', bio: "TEXT NOT NULL DEFAULT ''", admin: 'INTEGER NOT NULL DEFAULT 0',
       status: "TEXT NOT NULL DEFAULT 'online'", status_texto: "TEXT NOT NULL DEFAULT ''",
     },
-    mensagens: { conta: 'INTEGER', editado_em: 'INTEGER', fixada: 'INTEGER NOT NULL DEFAULT 0', canal_id: 'INTEGER', resposta: 'INTEGER' },
+    mensagens: { conta: 'INTEGER', editado_em: 'INTEGER', fixada: 'INTEGER NOT NULL DEFAULT 0', canal_id: 'INTEGER', resposta: 'INTEGER', enquete: 'TEXT' },
     canais: { servidor: 'INTEGER' },
   };
   for (const [tabela, colunas] of Object.entries(colunasNovas)) {
@@ -304,7 +310,14 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     reagir: db.prepare('INSERT INTO reacoes (mensagem, conta, emoji) VALUES (?, ?, ?)'),
     desreagir: db.prepare('DELETE FROM reacoes WHERE mensagem = ? AND conta = ? AND emoji = ?'),
     apagarReacoes: db.prepare('DELETE FROM reacoes WHERE mensagem = ?'),
+    votosDe: db.prepare('SELECT conta, opcao FROM votos WHERE mensagem = ? ORDER BY rowid'),
+    votar: db.prepare('INSERT OR IGNORE INTO votos (mensagem, conta, opcao) VALUES (?, ?, ?)'),
+    desvotar: db.prepare('DELETE FROM votos WHERE mensagem = ? AND conta = ? AND opcao = ?'),
+    desvotarTudo: db.prepare('DELETE FROM votos WHERE mensagem = ? AND conta = ?'),
+    apagarVotos: db.prepare('DELETE FROM votos WHERE mensagem = ?'),
+    criarEnquete: db.prepare('INSERT INTO mensagens (canal, canal_id, autor, cor, texto, criado_em, conta, enquete) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
     apagarReacoesDoCanal: db.prepare('DELETE FROM reacoes WHERE mensagem IN (SELECT id FROM mensagens WHERE canal_id = ?)'),
+    apagarVotosDoCanal: db.prepare('DELETE FROM votos WHERE mensagem IN (SELECT id FROM mensagens WHERE canal_id = ?)'),
     fixadas: db.prepare('SELECT * FROM mensagens WHERE canal_id = ? AND fixada = 1 ORDER BY id DESC'),
     mensagem: db.prepare('SELECT * FROM mensagens WHERE id = ?'),
     editarMensagem: db.prepare('UPDATE mensagens SET texto = ?, editado_em = ? WHERE id = ?'),
@@ -431,8 +444,21 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   const msgPublica = (m, servidor = sql.canal.get(m.canal_id)?.servidor ?? null) => ({
     id: m.id, canal: m.canal_id, servidor, autor: m.autor, cor: m.cor, texto: m.texto,
     criado_em: m.criado_em, conta: m.conta, editado_em: m.editado_em, fixada: m.fixada,
-    resposta: respostaDe(m.resposta), reacoes: reacoesDe(m.id),
+    resposta: respostaDe(m.resposta), reacoes: reacoesDe(m.id), enquete: enqueteDe(m),
   });
+  // { pergunta, multipla, opcoes: [{ texto, contas }] } com quem votou em cada opção
+  function enqueteDe(m) {
+    if (!m.enquete) return undefined;
+    let e;
+    try {
+      e = JSON.parse(m.enquete);
+    } catch {
+      return undefined;
+    }
+    const opcoes = e.opcoes.map((texto) => ({ texto, contas: [] }));
+    for (const v of sql.votosDe.all(m.id)) opcoes[v.opcao]?.contas.push(v.conta);
+    return { pergunta: e.pergunta, multipla: !!e.multipla, opcoes };
+  }
 
   // ---------- conversas diretas ----------
   const ehDm = (c) => c.tipo === 'dm';
@@ -759,6 +785,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       tirarDaVoz((o) => canaisVoz.has(o.voz));
       canais.forEach((c) => {
         sql.apagarReacoesDoCanal.run(c.id);
+        sql.apagarVotosDoCanal.run(c.id);
         sql.apagarMensagensDoCanal.run(c.id);
         sql.apagarCanal.run(c.id);
       });
@@ -963,6 +990,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       sql.apagarCanal.run(canal.id);
       if (canal.tipo === 'texto') {
         sql.apagarReacoesDoCanal.run(canal.id);
+        sql.apagarVotosDoCanal.run(canal.id);
         sql.apagarMensagensDoCanal.run(canal.id);
       } else {
         tirarDaVoz((o) => o.voz === canal.id);
@@ -1042,6 +1070,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (!m) return ack({ erro: 'Mensagem não encontrada' });
       if (m.conta !== u.conta) return ack({ erro: 'Só dá pra editar as suas mensagens' });
       if (m.texto.startsWith('/uploads/')) return ack({ erro: 'Arquivo não dá pra editar' });
+      if (m.enquete) return ack({ erro: 'Enquete não dá pra editar (apague e crie outra)' });
       texto = String(texto ?? '').trim().slice(0, MAX_TEXTO);
       if (!texto) return ack({ erro: 'Mensagem vazia' });
       sql.editarMensagem.run(texto, Date.now(), m.id);
@@ -1055,6 +1084,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (m.conta !== u.conta && !ehAdminDe(c.servidor, u.conta)) return ack({ erro: 'Só dá pra apagar as suas mensagens' });
       sql.apagarMensagem.run(m.id);
       sql.apagarReacoes.run(m.id);
+      sql.apagarVotos.run(m.id);
       emitirNoCanal(c, 'msg:apagada', { id: m.id, canal: c.id, servidor: c.servidor });
       ack({});
     });
@@ -1079,6 +1109,37 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         const jaTem = sql.reacoes.all(m.id).some((r) => r.emoji === emoji);
         if (!jaTem && sql.emojisDiferentes.get(m.id).n >= MAX_REACOES_DIFERENTES) return ack({ erro: 'Essa mensagem já tem emojis demais' });
         sql.reagir.run(m.id, u.conta, emoji);
+      }
+      emitirNoCanal(c, 'msg:atualizada', msgPublica(sql.mensagem.get(m.id), c.servidor));
+      ack({});
+    });
+
+    // ---------- enquetes ----------
+    const limparLinha = (t, max) => String(t ?? '').replace(/[\p{C}]/gu, '').replace(/\s+/g, ' ').trim().slice(0, max);
+    quando('enquete:criar', (u, { canal, pergunta, opcoes, multipla } = {}, ack) => {
+      const c = canalDoMembro(canal, u.conta, 'texto');
+      if (!c) return ack({ erro: 'Esse canal não existe mais' });
+      pergunta = limparLinha(pergunta, 200);
+      if (!pergunta) return ack({ erro: 'Escreve a pergunta' });
+      opcoes = (Array.isArray(opcoes) ? opcoes : []).map((o) => limparLinha(o, 80)).filter(Boolean);
+      opcoes = [...new Set(opcoes)].slice(0, 10);
+      if (opcoes.length < 2) return ack({ erro: 'Coloca pelo menos 2 opções diferentes' });
+      const enquete = JSON.stringify({ pergunta, opcoes, multipla: !!multipla });
+      const { lastInsertRowid } = sql.criarEnquete.run(c.nome, c.id, u.nome, u.cor, `📊 ${pergunta}`, Date.now(), u.conta, enquete);
+      emitirNoCanal(c, 'mensagem', msgPublica(sql.mensagem.get(Number(lastInsertRowid)), c.servidor));
+      ack({});
+    });
+    quando('enquete:votar', (u, { id, opcao } = {}, ack) => {
+      const { m, c } = mensagemDoMembro(id, u.conta);
+      const e = m && enqueteDe(m);
+      if (!e) return ack({ erro: 'Enquete não encontrada' });
+      opcao = Number(opcao);
+      if (!Number.isInteger(opcao) || opcao < 0 || opcao >= e.opcoes.length) return ack({ erro: 'Opção inválida' });
+      // clicar de novo tira o voto; numa enquete de uma resposta só, votar troca o voto
+      if (e.opcoes[opcao].contas.includes(u.conta)) sql.desvotar.run(m.id, u.conta, opcao);
+      else {
+        if (!e.multipla) sql.desvotarTudo.run(m.id, u.conta);
+        sql.votar.run(m.id, u.conta, opcao);
       }
       emitirNoCanal(c, 'msg:atualizada', msgPublica(sql.mensagem.get(m.id), c.servidor));
       ack({});

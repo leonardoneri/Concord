@@ -127,6 +127,7 @@
             <div class="caixa-msg">
               <button type="button" class="mais" id="btn-anexar" title="Enviar arquivo, até 25 MB (ou cole com Ctrl+V / arraste aqui)" data-icone="mais"></button>
               <input type="file" id="input-arquivo" multiple hidden>
+              <button type="button" class="mais" id="btn-enquete" title="Criar enquete" data-icone="enquete"></button>
               <input id="input-msg" maxlength="2000" autocomplete="off">
             </div>
             <div id="digitando"></div>
@@ -357,6 +358,17 @@
     <p>Cole o link de um vídeo do YouTube. Ele toca sincronizado pra todo mundo da chamada, e qualquer um pode pausar ou adiantar.</p>
     <input id="link-assistir" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
     <button class="btn-primario">Assistir</button>
+  </form>
+  <form id="painel-enquete" class="popover" hidden>
+    <h3>Nova enquete</h3>
+    <input id="enquete-pergunta" maxlength="200" placeholder="Pergunta (ex.: Bora jogar que horas?)" autocomplete="off" required>
+    <div id="enquete-opcoes"></div>
+    <button type="button" class="menu-botao" id="btn-mais-opcao">+ Adicionar opção</button>
+    <label class="linha-check"><input type="checkbox" id="enquete-multipla"> Pode votar em mais de uma</label>
+    <div class="acoes-som">
+      <button type="button" class="btn-secundario" id="btn-cancelar-enquete">Cancelar</button>
+      <button class="btn-primario">Criar enquete</button>
+    </div>
   </form>
   <div id="painel-sons" class="popover" hidden>
     <header>
