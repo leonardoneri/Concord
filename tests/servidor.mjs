@@ -5,6 +5,7 @@ import path from 'node:path';
 import { io } from 'socket.io-client';
 import { iniciarServidor } from '../server.js';
 
+process.env.CONCORD_SEM_TITULOS = '1'; // sem buscar título no YouTube durante o teste
 const PORTA = 3961;
 const URL_ = `http://127.0.0.1:${PORTA}`;
 const dados = fs.mkdtempSync(path.join(os.tmpdir(), 'concord-teste-'));
@@ -178,6 +179,27 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('pausa e posição vão pra sala', p?.tocando === false && p.posicao === 42);
   ok('posição inválida é recusada', !!(await emit(leo, 'assistir:controle', { tocando: true, posicao: -5 })).erro);
   ok('quem não está na sala não controla', !!(await emit(bia, 'assistir:controle', { tocando: true, posicao: 1 })).erro);
+  // fila e playlist
+  const fila = proximo(ana, 'assistir');
+  await emit(leo, 'assistir:adicionar', { videos: ['aaaaaaaaaaa', 'bbbbbbbbbbb'] });
+  const f = await fila;
+  ok('adicionar à fila não troca o vídeo atual', f?.video === 'M7lc1UVf-VE' && f.fila.length === 3 && f.atual === 0);
+  const agora = proximo(ana, 'assistir');
+  await emit(leo, 'assistir:adicionar', { videos: ['ccccccccccc', 'ddddddddddd'], agora: true, inicio: 1 });
+  const g = await agora;
+  ok('tocar agora (playlist do meio) entra logo depois do atual', g?.video === 'ddddddddddd' && g.atual === 2 && g.fila.map((x) => x.video[0]).join('') === 'Mcdab');
+  ok('quem não está na sala não mexe na fila', !!(await emit(bia, 'assistir:pular', 0)).erro);
+  await emit(leo, 'assistir:pular', 4);
+  ok('pular pra um vídeo da fila', (await emit(ana, 'assistir:estado'))?.video === 'bbbbbbbbbbb');
+  await emit(ana, 'assistir:fim', 4);
+  ok('último acabou: fica pausado no fim', (await emit(ana, 'assistir:estado'))?.tocando === false);
+  await emit(leo, 'assistir:pular', 2);
+  await emit(leo, 'assistir:fim', 2);
+  await emit(ana, 'assistir:fim', 2); // aviso repetido não pula dois
+  ok('vídeo acabou: vai pro próximo (uma vez só)', (await emit(ana, 'assistir:estado'))?.atual === 3);
+  await emit(leo, 'assistir:remover', 3);
+  const r = await emit(ana, 'assistir:estado');
+  ok('remover o atual toca o que vem depois', r?.atual === 3 && r.video === 'bbbbbbbbbbb' && r.fila.length === 4);
   leo.emit('voz:sair');
   ana.emit('voz:sair');
   await espera(200);

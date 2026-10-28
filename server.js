@@ -135,6 +135,24 @@ function criarLimitador() {
   };
 }
 
+// ---------- títulos do YouTube (pra fila do "assistir junto") ----------
+const MAX_FILA = 200;
+const titulosYoutube = new Map(); // id do vídeo -> título (null = privado/apagado)
+async function tituloYoutube(id) {
+  if (titulosYoutube.has(id)) return titulosYoutube.get(id);
+  if (process.env.CONCORD_SEM_TITULOS) return null;
+  try {
+    const url = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(`https://www.youtube.com/watch?v=${id}`)}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    const titulo = r.ok ? String((await r.json()).title ?? '').slice(0, 200) || null : null;
+    titulosYoutube.set(id, titulo);
+    if (titulosYoutube.size > 5000) titulosYoutube.delete(titulosYoutube.keys().next().value);
+    return titulo;
+  } catch {
+    return null; // sem internet agora: tenta de novo numa próxima vez
+  }
+}
+
 // ---------- GIFs: Tenor (TENOR_KEY) ou GIPHY (GIPHY_KEY), com cache curto pra economizar a cota ----------
 const chaveGif = () => ({ tenor: process.env.TENOR_KEY || '', giphy: process.env.GIPHY_KEY || '' });
 const cacheGifs = new Map(); // termo -> { em, gifs }
@@ -738,11 +756,34 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
 
   // Tira da call quem estava num canal de voz que deixou de existir / que a pessoa não pode mais ver
   // Estado do "assistir junto" com a posição de agora (quem recebe não precisa acertar relógio)
+  // a = { fila: [{ video, titulo, por }], atual (índice na fila), tocando, posicao, em }
   function assistirPublico(canal) {
     const a = assistindo.get(canal);
     if (!a) return null;
     const posicao = a.tocando ? a.posicao + (Date.now() - a.em) / 1000 : a.posicao;
-    return { video: a.video, por: a.por, tocando: a.tocando, posicao };
+    const item = a.fila[a.atual];
+    return {
+      video: item.video, titulo: item.titulo ?? null, por: item.por, tocando: a.tocando, posicao, atual: a.atual,
+      fila: a.fila.map(({ video, titulo, por }) => ({ video, titulo: titulo ?? null, por })),
+    };
+  }
+  // títulos dos vídeos da fila chegam aos poucos (oEmbed do YouTube não precisa de chave)
+  async function buscarTitulos(canal) {
+    const a = assistindo.get(canal);
+    if (!a || a.buscandoTitulos) return;
+    a.buscandoTitulos = true;
+    try {
+      let novos = 0;
+      for (let i = 0; i < a.fila.length; i++) {
+        if (a.fila[i].titulo !== undefined) continue;
+        a.fila[i].titulo = await tituloYoutube(a.fila[i].video);
+        if (assistindo.get(canal) !== a) return;
+        if (++novos % 10 === 0) emitirAssistir(canal);
+      }
+      if (novos) emitirAssistir(canal);
+    } finally {
+      a.buscandoTitulos = false;
+    }
   }
   function emitirAssistir(canal) {
     const dados = assistirPublico(canal);
@@ -1562,10 +1603,58 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     });
 
     // ---------- assistir junto (YouTube sincronizado na sala) ----------
-    quando('assistir:iniciar', (u, video, ack) => {
+    const tocarIndice = (a, i) => Object.assign(a, { atual: i, tocando: true, posicao: 0, em: Date.now() });
+    // videos = ids; agora = toca já (entra logo depois do atual); senão vai pro fim da fila.
+    // inicio = qual dos vídeos começa (playlist aberta num vídeo do meio)
+    function adicionarVideos(u, { videos, agora, inicio } = {}, ack) {
       if (u.voz == null) return ack({ erro: 'Entra numa sala de voz primeiro' });
-      if (typeof video !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(video)) return ack({ erro: 'Link do YouTube inválido' });
-      assistindo.set(u.voz, { video, por: u.nome, tocando: true, posicao: 0, em: Date.now() });
+      if (!Array.isArray(videos) || !videos.length || !videos.every((v) => typeof v === 'string' && /^[A-Za-z0-9_-]{11}$/.test(v))) {
+        return ack({ erro: 'Link do YouTube inválido' });
+      }
+      const a = assistindo.get(u.voz);
+      const cabe = MAX_FILA - (a?.fila.length ?? 0);
+      if (cabe <= 0) return ack({ erro: `A fila já tem ${MAX_FILA} vídeos` });
+      const itens = videos.slice(0, cabe).map((video) => ({ video, por: u.nome, titulo: titulosYoutube.get(video) }));
+      inicio = Math.min(Math.max(0, Number(inicio) || 0), itens.length - 1);
+      if (!a) {
+        assistindo.set(u.voz, tocarIndice({ fila: itens }, inicio));
+      } else if (agora) {
+        a.fila.splice(a.atual + 1, 0, ...itens);
+        tocarIndice(a, a.atual + 1 + inicio);
+      } else {
+        a.fila.push(...itens);
+      }
+      emitirAssistir(u.voz);
+      buscarTitulos(u.voz);
+      ack({ adicionados: itens.length, cortados: videos.length - itens.length });
+    }
+    quando('assistir:adicionar', adicionarVideos);
+    quando('assistir:iniciar', (u, video, ack) => adicionarVideos(u, { videos: [video], agora: true }, ack));
+    quando('assistir:pular', (u, i, ack) => {
+      const a = u.voz != null && assistindo.get(u.voz);
+      i = Number(i);
+      if (!a || !Number.isInteger(i) || !a.fila[i]) return ack({ erro: 'Vídeo não está na fila' });
+      tocarIndice(a, i);
+      emitirAssistir(u.voz);
+      ack({});
+    });
+    quando('assistir:remover', (u, i, ack) => {
+      const a = u.voz != null && assistindo.get(u.voz);
+      i = Number(i);
+      if (!a || !Number.isInteger(i) || !a.fila[i]) return ack({ erro: 'Vídeo não está na fila' });
+      a.fila.splice(i, 1);
+      if (!a.fila.length) assistindo.delete(u.voz);
+      else if (i === a.atual) tocarIndice(a, Math.min(i, a.fila.length - 1));
+      else if (i < a.atual) a.atual--;
+      emitirAssistir(u.voz);
+      ack({});
+    });
+    // o vídeo acabou (todo mundo avisa; só o primeiro aviso de cada vídeo conta)
+    quando('assistir:fim', (u, atual, ack) => {
+      const a = u.voz != null && assistindo.get(u.voz);
+      if (!a || a.atual !== Number(atual) || !a.tocando) return ack({});
+      if (a.atual + 1 < a.fila.length) tocarIndice(a, a.atual + 1);
+      else Object.assign(a, { tocando: false, posicao: a.posicao + (Date.now() - a.em) / 1000, em: Date.now() });
       emitirAssistir(u.voz);
       ack({});
     });

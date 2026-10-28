@@ -1229,8 +1229,8 @@ function renderCanais() {
       if (u.id !== estado.eu.id && ajustes[u.nome]?.mudo) m.classList.add('silenciado-pra-mim');
       if (u.tela) m.append(el('span', 'badge-vivo', 'AO VIVO'));
       if (u.camera) m.append(icone('camera'));
-      if (u.voz === estado.voz && u.id !== estado.eu.id) {
-        const r = iconeRede(u.rede);
+      if (u.voz === estado.voz) {
+        const r = iconeRede(redeDe(u));
         if (r) m.append(r);
       }
       if (u.surdo) m.append(icone('foneOff'));
@@ -2648,21 +2648,47 @@ let foco = null;
 let telasAntes = new Set();
 let tiraVisivel = true;
 
-function escolherDestaque(desejados) {
+// o "assistir junto" conta como uma transmissão (chave 'assistir') e tem preferência no automático
+let destaqueAtual = null;
+function escolherDestaque(desejados, assistindo) {
   const telas = desejados.filter((d) => d.tipo === 'tela');
-  // alguém começou a transmitir: volta pro automático pra mostrar a tela nova
-  if (telas.some((d) => !telasAntes.has(d.chave))) foco = null;
-  telasAntes = new Set(telas.map((d) => d.chave));
+  const chaves = [...(assistindo ? ['assistir'] : []), ...telas.map((d) => d.chave)];
+  // alguém começou a transmitir (ou colocou vídeo): volta pro automático pra mostrar
+  if (chaves.some((c) => !telasAntes.has(c))) foco = null;
+  telasAntes = new Set(chaves);
   if (foco === false) return null;
-  if (foco && desejados.some((d) => d.chave === foco)) return foco;
+  if (foco && (foco === 'assistir' ? assistindo : desejados.some((d) => d.chave === foco))) return foco;
   foco = null;
+  if (assistindo) return 'assistir';
   return (telas.find((d) => !d.local) ?? telas[0])?.chave ?? null;
 }
 
 function focarTile(chave) {
-  foco = $('#palco').firstElementChild?.dataset.chave === chave ? false : chave;
+  foco = destaqueAtual === chave ? false : chave;
   renderGrid();
 }
+
+// vídeo diminuído: o player (que não pode mudar de lugar no DOM, senão o YouTube recarrega)
+// fica por cima de um bloco reservado na faixa, do mesmo tamanho dos outros
+function posicionarMini() {
+  const box = $('#assistir');
+  const lugar = $('#grid').classList.contains('assistindo-mini') && $('#tira .tile-assistir');
+  if (!lugar) {
+    box.style.cssText = '';
+    return;
+  }
+  const g = $('#grid').getBoundingClientRect();
+  const r = lugar.getBoundingClientRect();
+  const visivel = r.width > 0 && r.height > 0;
+  Object.assign(box.style, {
+    left: `${r.left - g.left}px`, top: `${r.top - g.top}px`, width: `${r.width}px`, height: `${r.height}px`,
+    visibility: visivel ? '' : 'hidden',
+  });
+}
+new ResizeObserver(posicionarMini).observe($('#grid'));
+$('#tira').addEventListener('scroll', posicionarMini);
+$('#ampliar-assistir').onclick = () => focarTile('assistir');
+$('#btn-diminuir-assistir').onclick = () => focarTile('assistir');
 
 function renderGrid() {
   const grid = $('#grid');
@@ -2685,15 +2711,29 @@ function renderGrid() {
   }
 
   const assistindo = !!(estado.voz && estado.assistir);
-  const destaque = assistindo ? null : escolherDestaque(desejados);
-  grid.classList.toggle('foco', !!destaque || assistindo);
-  grid.classList.toggle('assistindo', assistindo);
-  grid.classList.toggle('sem-tira', (!!destaque || assistindo) && !tiraVisivel);
-  $('#btn-tira').hidden = !destaque && !assistindo;
+  const destaque = escolherDestaque(desejados, assistindo);
+  destaqueAtual = destaque;
+  const videoGrande = destaque === 'assistir';
+  grid.classList.toggle('foco', !!destaque);
+  grid.classList.toggle('assistindo', videoGrande);
+  grid.classList.toggle('assistindo-mini', assistindo && !videoGrande);
+  grid.classList.toggle('sem-tira', !!destaque && !tiraVisivel);
+  $('#btn-tira').hidden = !destaque;
   $('#btn-tira').title = tiraVisivel ? 'Esconder participantes' : 'Mostrar participantes';
   $('#btn-tira').classList.toggle('desligado', !tiraVisivel);
 
-  const existentes = new Map([...grid.querySelectorAll('.tile')].map((t) => [t.dataset.chave, t]));
+  // bloco reservado pro vídeo diminuído (primeiro da faixa)
+  let reserva = tira.querySelector('.tile-assistir');
+  if (assistindo && !videoGrande) {
+    if (!reserva) {
+      reserva = el('div', 'tile tile-assistir');
+      reserva.dataset.chave = 'assistir';
+    }
+    if (tira.firstElementChild !== reserva) tira.prepend(reserva);
+  } else {
+    reserva?.remove();
+  }
+  const existentes = new Map([...grid.querySelectorAll('.tile:not(.tile-assistir)')].map((t) => [t.dataset.chave, t]));
   for (const d of desejados) {
     let tile = existentes.get(d.chave);
     if (tile) existentes.delete(d.chave);
@@ -2709,6 +2749,7 @@ function renderGrid() {
     atualizarTile(tile, d);
   }
   for (const t of existentes.values()) t.remove();
+  posicionarMini();
   // mantém a ordem estável na faixa
   desejados.filter((d) => d.chave !== destaque).forEach((d) => {
     const t = tira.querySelector(`[data-chave="${d.chave}"]`);
@@ -2801,8 +2842,8 @@ function atualizarTile(tile, d) {
   }
   if (d.tipo === 'cam' && d.u.surdo) nome.append(icone('foneOff'));
   else if (d.tipo === 'cam' && d.u.mudo) nome.append(icone('micOff'));
-  if (d.tipo === 'cam' && !d.local) {
-    const r = iconeRede(d.u.rede);
+  if (d.tipo === 'cam') {
+    const r = iconeRede(redeDe(d.u));
     if (r) nome.append(r);
   }
 }
@@ -3645,6 +3686,47 @@ let recebidoEm = 0; // quando chegou o estado (pra calcular onde o vídeo deveri
 let aplicandoAte = 0; // mudanças feitas pelo próprio app (não são cliques da pessoa)
 let surdoAssistir = null;
 
+// { video, lista }: vídeo e/ou playlist de um link do YouTube
+function linkDoYoutube(texto) {
+  const video = idDoYoutube(texto);
+  let lista = null;
+  try {
+    lista = new URL(String(texto).trim()).searchParams.get('list');
+  } catch {}
+  return { video, lista: /^[A-Za-z0-9_-]{10,64}$/.test(lista ?? '') ? lista : null };
+}
+
+// ids dos vídeos de uma playlist: abre um player escondido com ela e pergunta a lista (até 200)
+async function videosDaPlaylist(lista) {
+  await carregarYoutube();
+  return new Promise((ok, falha) => {
+    const div = document.createElement('div');
+    div.style.cssText = 'position:fixed;left:-9999px;top:0;width:320px;height:180px';
+    document.body.append(div);
+    let tentativas = 0;
+    let timer = null;
+    const fim = (v, erro) => {
+      clearInterval(timer);
+      try { p.destroy(); } catch {}
+      div.remove();
+      erro ? falha(erro) : ok(v);
+    };
+    const p = new YT.Player(div, {
+      playerVars: { listType: 'playlist', list: lista, autoplay: 0, mute: 1, origin: location.origin },
+      events: {
+        onReady: () => {
+          timer = setInterval(() => {
+            const ids = p.getPlaylist?.();
+            if (ids?.length) fim(ids.filter((id) => /^[A-Za-z0-9_-]{11}$/.test(id)));
+            else if (++tentativas > 30) fim(null, new Error('playlist vazia'));
+          }, 300);
+        },
+        onError: () => fim(null, new Error('playlist inválida')),
+      },
+    });
+  });
+}
+
 function idDoYoutube(texto) {
   texto = String(texto ?? '').trim();
   if (/^[A-Za-z0-9_-]{11}$/.test(texto)) return texto;
@@ -3687,6 +3769,8 @@ function sincronizarPlayer() {
   const a = estado.assistir;
   if (!player?.getPlayerState || !a || playerVideo !== a.video) return;
   const st = player.getPlayerState();
+  // acabou: espera o servidor mandar o próximo (a não ser que seja o mesmo vídeo de novo na fila)
+  if (st === YT.PlayerState.ENDED && !(a.tocando && posicaoEsperada() < 3)) return;
   const atual = player.getCurrentTime?.() ?? 0;
   const esperada = posicaoEsperada();
   if (Math.abs(atual - esperada) > 2) {
@@ -3710,9 +3794,20 @@ function sincronizarPlayer() {
 
 // a pessoa deu play/pause/pulou no player: avisa a sala (se for diferente do que todo mundo já está vendo)
 function mudouPlayer(e) {
-  if (Date.now() < aplicandoAte || !estado.assistir) return;
+  if (!estado.assistir) return;
   const S = YT.PlayerState;
-  if (![S.PLAYING, S.PAUSED, S.ENDED].includes(e.data)) return;
+  if (e.data === S.ENDED) {
+    // acabou: o servidor passa pro próximo da fila (todo mundo avisa, ele só conta uma vez).
+    // Só vale se é o vídeo atual e chegou mesmo no fim: trocando de vídeo, o player às vezes
+    // avisa "acabou" do anterior
+    const a = estado.assistir;
+    const dur = player?.getDuration?.() ?? 0;
+    const doAtual = playerVideo === a.video && player?.getVideoData?.().video_id === a.video;
+    if (a.tocando && doAtual && dur > 0 && player.getCurrentTime() >= dur - 2) socket.emit('assistir:fim', a.atual);
+    return;
+  }
+  if (Date.now() < aplicandoAte) return;
+  if (![S.PLAYING, S.PAUSED].includes(e.data)) return;
   const tocando = e.data === S.PLAYING;
   const posicao = player.getCurrentTime();
   if (tocando === estado.assistir.tocando && Math.abs(posicao - posicaoEsperada()) < 1.5) return;
@@ -3720,6 +3815,62 @@ function mudouPlayer(e) {
   recebidoEm = Date.now();
   socket.emit('assistir:controle', { tocando, posicao });
 }
+
+function renderInfoAssistir() {
+  const a = estado.assistir;
+  if (!a) return;
+  const titulo = a.titulo ?? (playerVideo === a.video ? player?.getVideoData?.().title : null);
+  const n = a.fila?.length ?? 1;
+  $('#info-assistir').textContent = `${a.por} colocou${titulo ? `: ${titulo}` : ' um vídeo'}${n > 1 ? ` · ${a.atual + 1} de ${n}` : ''}`;
+  $('#btn-proximo-video').hidden = !(a.atual + 1 < n);
+  $('#btn-fila-assistir').hidden = n < 2;
+  $('#btn-fila-assistir').textContent = filaVisivel ? `Esconder fila (${n})` : `Fila (${n})`;
+}
+
+// fila do "assistir junto": clique pra pular pra um vídeo, X tira da fila
+let filaVisivel = lerStorage('filaAssistir', true);
+let filaRenderizada = '';
+function renderFila() {
+  const a = estado.assistir;
+  const fila = a?.fila ?? [];
+  $('#fila-assistir').hidden = !filaVisivel || fila.length < 2;
+  const chave = JSON.stringify([a?.atual, fila]);
+  if (chave === filaRenderizada) return;
+  filaRenderizada = chave;
+  $('#titulo-fila').textContent = `Fila · ${fila.length} vídeos`;
+  $('#lista-fila').replaceChildren(...fila.map((v, i) => {
+    const li = el('li', `item-fila${i === a.atual ? ' atual' : ''}`);
+    li.title = i === a.atual ? 'Tocando agora' : 'Tocar este';
+    const img = el('img');
+    img.src = `https://i.ytimg.com/vi/${v.video}/mqdefault.jpg`;
+    img.loading = 'lazy';
+    img.alt = '';
+    const txt = el('div', 'txt');
+    txt.append(el('span', 'titulo-item', v.titulo ?? 'Vídeo do YouTube'), el('span', 'por-item', `${i === a.atual ? '▶ Tocando · ' : ''}${v.por}`));
+    const x = el('button', 'btn-icone');
+    x.type = 'button';
+    x.title = 'Tirar da fila';
+    x.append(icone('fechar'));
+    x.onclick = (e) => {
+      e.stopPropagation();
+      socket.emit('assistir:remover', i, (r) => r?.erro && avisar(r.erro));
+    };
+    li.append(el('span', 'n-item', String(i + 1)), img, txt, x);
+    li.onclick = () => i !== a.atual && socket.emit('assistir:pular', i, (r) => r?.erro && avisar(r.erro));
+    return li;
+  }));
+  $('#lista-fila .atual')?.scrollIntoView({ block: 'nearest' });
+}
+$('#btn-fila-assistir').onclick = () => {
+  filaVisivel = !filaVisivel;
+  salvarStorage('filaAssistir', filaVisivel);
+  renderFila();
+  renderInfoAssistir();
+};
+$('#btn-proximo-video').onclick = () => {
+  const a = estado.assistir;
+  if (a && a.atual + 1 < a.fila.length) socket.emit('assistir:pular', a.atual + 1, (r) => r?.erro && avisar(r.erro));
+};
 
 function fecharPlayer() {
   player?.destroy?.();
@@ -3740,7 +3891,8 @@ async function aplicarAssistir(a) {
     return;
   }
   $('#assistir').hidden = false;
-  $('#info-assistir').textContent = `${a.por} colocou um vídeo`;
+  renderInfoAssistir();
+  renderFila();
   renderGrid();
   if (playerVideo === a.video && player) return sincronizarPlayer();
   try {
@@ -3762,19 +3914,24 @@ async function aplicarAssistir(a) {
       onReady: () => {
         aplicandoAte = Date.now() + 2000;
         sincronizarPlayer();
-        const titulo = player.getVideoData?.().title;
-        if (titulo && estado.assistir) $('#info-assistir').textContent = `${estado.assistir.por} colocou: ${titulo}`;
+        renderInfoAssistir();
       },
       onStateChange: (e) => {
         mudouPlayer(e);
-        const titulo = player?.getVideoData?.().title;
-        if (titulo && estado.assistir) $('#info-assistir').textContent = `${estado.assistir.por} colocou: ${titulo}`;
+        renderInfoAssistir();
       },
       onError: (e) => {
+        const a = estado.assistir;
+        const temProximo = a && a.atual + 1 < (a.fila?.length ?? 1);
         const msg = [101, 150, 153].includes(e.data)
-          ? 'Esse vídeo não deixa ser assistido fora do YouTube. Tenta outro.'
+          ? 'Esse vídeo não deixa ser assistido fora do YouTube.'
           : 'O YouTube não conseguiu tocar esse vídeo.';
-        avisar(msg);
+        avisar(temProximo ? `${msg} Pulando pro próximo da fila…` : `${msg} Tenta outro.`);
+        // não trava a fila num vídeo bloqueado (todo mundo avisa; o servidor só pula uma vez)
+        if (temProximo) {
+          const atual = a.atual;
+          setTimeout(() => estado.assistir?.atual === atual && socket.emit('assistir:fim', atual), 2500);
+        }
       },
     },
   });
@@ -3823,19 +3980,47 @@ function abrirAssistir(e) {
   painel.style.left = `${Math.max(8, Math.min(innerWidth - largura - 8, r.left + r.width / 2 - largura / 2))}px`;
   painel.style.top = `${Math.max(8, r.top - painel.getBoundingClientRect().height - 10)}px`;
   $('#link-assistir').value = '';
+  // já tem vídeo: escolhe entre tocar agora ou pôr na fila
+  $('#btn-fila-add').hidden = !estado.assistir;
+  $('#btn-tocar-agora').textContent = estado.assistir ? 'Tocar agora' : 'Assistir';
   $('#link-assistir').focus();
 }
 $('#btn-assistir').onclick = abrirAssistir;
 $('#btn-trocar-video').onclick = abrirAssistir;
+async function enviarVideo(agora) {
+  const { video, lista } = linkDoYoutube($('#link-assistir').value);
+  if (!video && !lista) return avisar('Esse link não parece ser de um vídeo ou playlist do YouTube.');
+  let videos = [video];
+  let inicio = 0;
+  const botoes = [$('#btn-tocar-agora'), $('#btn-fila-add')];
+  if (lista) {
+    botoes.forEach((b) => (b.disabled = true));
+    const texto = $('#btn-tocar-agora').textContent;
+    $('#btn-tocar-agora').textContent = 'Abrindo playlist…';
+    try {
+      const ids = await videosDaPlaylist(lista);
+      videos = ids;
+      // link de um vídeo dentro da playlist: começa nele
+      inicio = video ? Math.max(0, ids.indexOf(video)) : 0;
+    } catch {
+      if (!video) return avisar('Não consegui abrir essa playlist (ela é privada?).');
+    } finally {
+      botoes.forEach((b) => (b.disabled = false));
+      $('#btn-tocar-agora').textContent = texto;
+    }
+  }
+  socket.emit('assistir:adicionar', { videos, agora, inicio }, (r) => {
+    if (r?.erro) return avisar(r.erro);
+    fecharPopovers();
+    if (r.cortados) avisar(`A fila só cabe 200 vídeos: ${r.cortados} ficaram de fora.`, 5000);
+    else if (!agora || videos.length > 1) avisar(videos.length > 1 ? `${r.adicionados} vídeos da playlist na fila.` : 'Vídeo adicionado na fila.', 3000);
+  });
+}
+$('#btn-fila-add').onclick = () => enviarVideo(false);
 $('#btn-parar-assistir').onclick = () => socket.emit('assistir:parar');
 $('#painel-assistir').onsubmit = (e) => {
   e.preventDefault();
-  const id = idDoYoutube($('#link-assistir').value);
-  if (!id) return avisar('Esse link não parece ser de um vídeo do YouTube.');
-  socket.emit('assistir:iniciar', id, (r) => {
-    if (r?.erro) return avisar(r.erro);
-    fecharPopovers();
-  });
+  enviarVideo(true);
 };
 
 // ---------- qualidade da conexão na chamada ----------
@@ -3915,10 +4100,27 @@ async function medirRede() {
 setInterval(medirRede, 3000);
 
 // painel "Voz conectada": cor e detalhes da minha conexão
+// a minha conexão vem da medição local (mais fresca que a que voltou pelo servidor)
+function redeLocal() {
+  return peers.size && minhaRede.ping != null ? { ping: minhaRede.ping, perda: minhaRede.perda } : null;
+}
+function redeDe(u) {
+  return u.id === estado.eu?.id ? redeLocal() : u.rede;
+}
+let ultimaRedeLocal = '';
+
 function renderRede() {
   const info = $('#painel-voz .conectado');
-  const r = minhaRede.ping == null ? null : { ping: minhaRede.ping, perda: minhaRede.perda };
+  const r = redeLocal();
   const n = nivelRede(r);
+  $('#meu-ping').textContent = r ? ` · ${r.ping} ms` : '';
+  // o meu sinal na lista da sala e no meu quadro acompanha a medição
+  const agora = r ? `${n}:${r.ping}:${r.perda}` : '';
+  if (agora !== ultimaRedeLocal) {
+    ultimaRedeLocal = agora;
+    renderCanais();
+    renderGrid();
+  }
   info.classList.toggle('rede-media', n === 'media');
   info.classList.toggle('rede-ruim', n === 'ruim');
   info.title = peers.size ? textoRede(r) : 'Sozinho na sala';

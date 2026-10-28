@@ -70,7 +70,7 @@
       <div id="painel-voz" hidden>
         <div class="linha-voz">
           <div class="info-voz">
-            <span class="conectado"><span data-icone="sinal"></span>Voz conectada</span>
+            <span class="conectado"><span data-icone="sinal"></span>Voz conectada<span id="meu-ping"></span></span>
             <span id="nome-canal-voz"></span>
           </div>
           <button class="btn-icone btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
@@ -140,10 +140,20 @@
         <section id="view-voz" hidden>
           <div id="grid">
             <div id="assistir" hidden>
-              <div class="video-assistir"><div id="player-assistir"></div></div>
+              <div class="corpo-assistir">
+                <div class="video-assistir"><div id="player-assistir"></div></div>
+                <aside id="fila-assistir" hidden>
+                  <div class="titulo-fila" id="titulo-fila">Fila</div>
+                  <ol id="lista-fila"></ol>
+                </aside>
+              </div>
+              <button type="button" id="ampliar-assistir" title="Ampliar o vídeo"><span>Assistindo junto · clique pra ampliar</span></button>
               <div class="barra-assistir">
                 <span id="info-assistir"></span>
-                <button type="button" class="btn-secundario" id="btn-trocar-video">Trocar vídeo</button>
+                <button type="button" class="btn-secundario" id="btn-fila-assistir">Fila</button>
+                <button type="button" class="btn-secundario" id="btn-proximo-video">Próximo ⏭</button>
+                <button type="button" class="btn-secundario" id="btn-trocar-video">+ Vídeo</button>
+                <button type="button" class="btn-secundario" id="btn-diminuir-assistir">Diminuir</button>
                 <button type="button" class="btn-secundario" id="btn-parar-assistir">Parar</button>
               </div>
             </div>
@@ -389,9 +399,12 @@
   <div id="menu-pessoa" class="popover" hidden></div>
   <form id="painel-assistir" class="popover" hidden>
     <h3>Assistir junto</h3>
-    <p>Cole o link de um vídeo do YouTube. Ele toca sincronizado pra todo mundo da chamada, e qualquer um pode pausar ou adiantar.</p>
+    <p>Cole o link de um vídeo ou de uma playlist do YouTube. Toca sincronizado pra todo mundo da chamada, e qualquer um pode pausar, adiantar ou mexer na fila.</p>
     <input id="link-assistir" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
-    <button class="btn-primario">Assistir</button>
+    <div class="acoes-assistir">
+      <button type="button" class="btn-secundario" id="btn-fila-add" hidden>Adicionar à fila</button>
+      <button class="btn-primario" id="btn-tocar-agora">Assistir</button>
+    </div>
   </form>
   <form id="painel-enquete" class="popover" hidden>
     <h3>Nova enquete</h3>
