@@ -58,20 +58,24 @@ function icone(nome, cls) {
 $$('[data-icone]').forEach((e) => e.prepend(icone(e.dataset.icone)));
 
 // ---------- estado ----------
+const SEM_SERVIDOR = { id: null, nome: '', icone: null, dono: null, convite: '', canais: [] };
 const estado = {
   eu: null,
-  servidor: { nome: '', icone: null, canais: [] },
-  perfis: [], // todas as contas (online e offline): { id, nome, cor, avatar, bio, admin }
-  canaisTexto: [],
+  servidores: [], // os servidores de que participo (barra da esquerda): { id, nome, icone, dono }
+  servidor: SEM_SERVIDOR, // o aberto agora, com convite e canais
+  perfis: [], // membros do servidor aberto (online e offline): { id, nome, cor, avatar, bio, admin, dono }
+  canaisTexto: [], // canais do servidor aberto: { id, tipo, nome, topico }
   canaisVoz: [],
   iceServers: [],
-  canalTexto: null,
+  canalTexto: null, // id
+  srvNaoLidos: new Set(), // servidores com mensagem nova
   view: 'texto', // 'texto' | 'voz'
   usuarios: [],
   naoLidos: new Set(),
   membrosVisiveis: lerStorage('membrosVisiveis', true),
   // voz
-  voz: null,
+  voz: null, // id do canal de voz (pode ser de outro servidor)
+  vozInfo: null, // { canal, servidor }: nomes pro painel da chamada
   mudo: false,
   surdo: false,
   mic: null,
@@ -140,25 +144,24 @@ function atalhosGlobais(ligar) {
 // ---------- convite ----------
 const ehLocal = (host) => ['localhost', '127.0.0.1'].includes(host);
 
-async function abrirConvite() {
+// Endereço que os amigos conseguem abrir (no app desktop hospedando, é o link do túnel)
+async function enderecoPublico() {
   const info = appDesktop ? await appDesktop.info() : null;
-  let link = info?.link ?? (ehLocal(location.hostname) ? null : location.origin);
-  const extras = info?.enderecos ?? [];
-  if (!link && extras.length) link = extras[0];
+  return info?.link ?? (ehLocal(location.hostname) ? info?.enderecos?.[0] ?? location.origin : location.origin);
+}
 
-  $('#convite-link').value = link ?? '';
-  $('#btn-copiar').disabled = !link;
-  if (!link) {
-    $('#convite-dica').textContent = 'Esse servidor só está acessível neste PC. Crie o servidor com "link pra amigos pela internet" marcado.';
-  } else if (link.startsWith('https:')) {
-    $('#convite-dica').textContent = 'Funciona de qualquer lugar. Seu amigo pode colar no app Concord ou abrir direto no navegador (Chrome/Edge), sem instalar nada.';
-  } else {
-    $('#convite-dica').textContent = 'Esse link só funciona na mesma rede ou VPN (Radmin, Hamachi…) e precisa do app: pelo navegador o microfone não funciona em http.';
-  }
-  $('#convite-extra').textContent = [
-    extras.length > 1 && `Outros endereços deste PC: ${extras.slice(1).join(', ')}.`,
-    info?.link && 'O link muda toda vez que você cria o servidor de novo.',
-  ].filter(Boolean).join(' ');
+async function abrirConvite() {
+  fecharPopovers();
+  const { nome, convite } = estado.servidor;
+  if (!convite) return;
+  const base = await enderecoPublico();
+  $('#convite-titulo').textContent = `Convidar amigos pra ${nome}`;
+  $('#convite-link').value = `${base}/?convite=${convite}`;
+  $('#convite-codigo').textContent = convite;
+  $('#convite-dica').textContent = ehLocal(new URL(base).hostname)
+    ? 'Esse servidor só está acessível neste PC: o link não funciona pros amigos.'
+    : 'O link abre no navegador (Chrome/Edge) sem instalar nada, ou dá pra colar o código no app.';
+  $('#btn-novo-convite').hidden = !souAdmin();
   $('#modal-convite').hidden = false;
   $('#convite-link').select();
 }
@@ -166,6 +169,24 @@ async function abrirConvite() {
 $$('.btn-convidar').forEach((b) => (b.onclick = abrirConvite));
 $('#btn-fechar-convite').onclick = () => ($('#modal-convite').hidden = true);
 $('#modal-convite').onclick = (e) => { if (e.target.id === 'modal-convite') e.target.hidden = true; };
+$('#btn-novo-convite').onclick = () => {
+  if (!confirm('Gerar outro convite? O atual para de funcionar (quem já entrou continua no servidor).')) return;
+  socket.emit('servidor:novo-convite', null, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    // o 'servidor' com o código novo chega antes do ack
+    abrirConvite();
+  });
+};
+
+// Convite que veio no link (…/?convite=CODIGO): usa depois do login
+function conviteDaUrl() {
+  return new URLSearchParams(location.search).get('convite');
+}
+function esquecerConviteDaUrl() {
+  const url = new URL(location.href);
+  url.searchParams.delete('convite');
+  history.replaceState(null, '', url);
+}
 $('#btn-copiar').onclick = async () => {
   const input = $('#convite-link');
   try {
@@ -220,6 +241,10 @@ if (token) {
   socket.connect();
   entrar();
 } else {
+  if (conviteDaUrl()) {
+    modoLogin = 'criar';
+    $('#convite').value = conviteDaUrl();
+  }
   mostrarLogin();
 }
 
@@ -244,6 +269,8 @@ $('#form-login').addEventListener('submit', (e) => {
     token = res.token;
     salvarStorage('token', token);
     $('#senha').value = '';
+    // criou a conta com o convite: já está no servidor, não precisa entrar de novo
+    if (modoLogin === 'criar' && $('#convite').value === conviteDaUrl()) esquecerConviteDaUrl();
     $('#convite').value = '';
     entrar();
   });
@@ -261,78 +288,195 @@ function entrar() {
     }
     const primeiraVez = !estado.eu;
     estado.eu = { id: res.id, conta: res.conta, nome: res.nome, usuario: res.usuario };
-    estado.perfis = res.perfis;
-    aplicarServidor(res.servidor);
+    estado.servidores = res.servidores;
     estado.iceServers = res.iceServers;
     if (primeiraVez) aplicarPrefs(res.prefs);
     $('#login').hidden = true;
     $('#app').hidden = false;
     $('#meu-nome').textContent = res.nome;
     if (primeiraVez && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
-    const canal = estado.canaisTexto.includes(estado.canalTexto) ? estado.canalTexto : estado.canaisTexto[0];
-    abrirTexto(canal);
+    const convite = conviteDaUrl();
+    if (convite) {
+      esquecerConviteDaUrl();
+      return entrarComConvite(convite);
+    }
+    const lembrado = estado.servidor.id ?? lerStorage('servidorAtivo', null);
+    abrirServidor(estado.servidores.some((x) => x.id === lembrado) ? lembrado : estado.servidores[0]?.id);
   });
 }
 
 // ---------- servidor (nome, ícone, canais) e perfis ----------
 function aplicarServidor(srv) {
   estado.servidor = srv;
-  estado.canaisTexto = srv.canais.filter((c) => c.tipo === 'texto').map((c) => c.nome);
-  estado.canaisVoz = srv.canais.filter((c) => c.tipo === 'voz').map((c) => c.nome);
+  estado.canaisTexto = srv.canais.filter((c) => c.tipo === 'texto');
+  estado.canaisVoz = srv.canais.filter((c) => c.tipo === 'voz');
   document.title = srv.nome ? `${srv.nome} · Concord` : 'Concord';
+  const i = estado.servidores.findIndex((x) => x.id === srv.id);
+  if (i >= 0) estado.servidores[i] = { id: srv.id, nome: srv.nome, icone: srv.icone, dono: srv.dono };
 }
+
+// Troca o servidor aberto (id vazio = nenhum: mostra a tela de criar/entrar)
+function abrirServidor(id) {
+  fecharPopovers();
+  if (id == null) {
+    aplicarServidor(SEM_SERVIDOR);
+    estado.perfis = [];
+    estado.canalTexto = null;
+    mensagens = [];
+    $('#app').classList.add('sem-servidor');
+    render();
+    renderMensagens();
+    abrirNovoServidor(true);
+    return;
+  }
+  socket.emit('servidor:abrir', id, (res) => {
+    if (res?.erro) {
+      avisar(res.erro);
+      return abrirServidor(estado.servidores.find((x) => x.id !== id)?.id);
+    }
+    $('#app').classList.remove('sem-servidor');
+    $('#modal-novo-servidor').hidden = true;
+    const trocou = estado.servidor.id !== id;
+    if (trocou) estado.naoLidos.clear();
+    estado.perfis = res.perfis;
+    aplicarServidor(res.servidor);
+    estado.srvNaoLidos.delete(id);
+    salvarStorage('servidorAtivo', id);
+    const preferido = trocou ? lerStorage('ultimoCanal', {})[id] : estado.canalTexto;
+    abrirTexto((estado.canaisTexto.find((c) => c.id === preferido) ?? estado.canaisTexto[0])?.id);
+  });
+}
+
+function entrarComConvite(convite) {
+  socket.emit('servidor:entrar', { convite }, (res) => {
+    if (res?.erro) {
+      avisar(res.erro);
+      if (estado.servidor.id == null) abrirServidor(estado.servidores[0]?.id);
+      return;
+    }
+    $('#modal-novo-servidor').hidden = true;
+    abrirServidor(res.id);
+  });
+}
+
+// Tela de criar servidor / entrar com convite; `obrigatorio` = não tem nenhum servidor ainda
+function abrirNovoServidor(obrigatorio = false) {
+  fecharPopovers();
+  $('#btn-fechar-novo-servidor').hidden = obrigatorio;
+  $('#novo-servidor-dica').textContent = obrigatorio
+    ? 'Você ainda não está em nenhum servidor. Crie um pra sua galera ou entre num com o convite de um amigo.'
+    : 'Crie um servidor pra sua galera ou entre num com o convite de um amigo.';
+  $('#novo-servidor-nome').value ||= estado.eu ? `Servidor de ${estado.eu.nome}` : '';
+  $('#modal-novo-servidor').hidden = false;
+}
+
+$('#btn-novo-servidor').onclick = () => abrirNovoServidor(estado.servidores.length === 0);
+$('#btn-fechar-novo-servidor').onclick = () => ($('#modal-novo-servidor').hidden = true);
+$('#modal-novo-servidor').onclick = (e) => {
+  if (e.target.id === 'modal-novo-servidor' && estado.servidores.length) e.target.hidden = true;
+};
+$('#form-criar-servidor').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const botao = e.target.querySelector('button');
+  botao.disabled = true;
+  socket.emit('servidor:criar', { nome: $('#novo-servidor-nome').value }, (res) => {
+    botao.disabled = false;
+    if (res?.erro) return avisar(res.erro);
+    $('#novo-servidor-nome').value = '';
+    // a lista nova ('servidores') chega antes do ack
+    abrirServidor(res.id);
+    setTimeout(abrirConvite, 300);
+  });
+});
+$('#form-entrar-servidor').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const convite = $('#entrar-convite').value.trim();
+  $('#entrar-convite').value = '';
+  entrarComConvite(convite);
+});
+
+// menu do nome do servidor
+$('#btn-menu-servidor').onclick = (e) => {
+  e.stopPropagation();
+  const menu = $('#menu-servidor');
+  if (!menu.hidden) return fecharPopovers();
+  fecharPopovers();
+  const dono = estado.servidor.dono === estado.eu?.conta;
+  $('#ms-sair').hidden = dono;
+  menu.hidden = false;
+  const r = e.currentTarget.getBoundingClientRect();
+  menu.style.left = `${r.left + 8}px`;
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.width = `${Math.max(200, r.width - 16)}px`;
+};
+$('#ms-convidar').onclick = abrirConvite;
+$('#ms-config').onclick = () => { fecharPopovers(); abrirModalServidor(); };
+$('#ms-sair').onclick = () => {
+  fecharPopovers();
+  const { id, nome } = estado.servidor;
+  if (!confirm(`Sair de ${nome}? Pra voltar, vai precisar de um convite.`)) return;
+  socket.emit('servidor:sair', id, (res) => res?.erro && avisar(res.erro));
+};
 
 const perfilDe = (nome) => estado.perfis.find((p) => p.nome === nome);
 const perfilPorConta = (id) => estado.perfis.find((p) => p.id === id);
 const souAdmin = () => !!perfilPorConta(estado.eu?.conta)?.admin;
-const canalInfo = (tipo, nome) => estado.servidor.canais.find((c) => c.tipo === tipo && c.nome === nome);
+const canalPorId = (id) => estado.servidor.canais.find((c) => c.id === id);
 
 function iniciais(nome) {
   return nome.split(/\s+/).filter(Boolean).slice(0, 3).map((p) => [...p][0]).join('').toUpperCase() || '?';
 }
-function pintarIconeServidor(e) {
-  const { nome, icone } = estado.servidor;
+function pintarIconeServidor(e, srv = estado.servidor) {
+  const { nome, icone } = srv;
   e.textContent = icone ? '' : iniciais(nome);
   e.style.backgroundImage = icone ? `url("${icone}")` : '';
   e.classList.toggle('com-imagem', !!icone);
 }
 
+socket.on('servidores', (lista) => {
+  estado.servidores = lista;
+  // saí / apagaram o servidor aberto
+  if (estado.servidor.id != null && !lista.some((x) => x.id === estado.servidor.id)) abrirServidor(lista[0]?.id);
+  else renderRail();
+});
+
 socket.on('servidor', (srv) => {
+  if (srv.id !== estado.servidor.id) {
+    // outro servidor meu mudou nome/ícone: só atualiza a barra da esquerda
+    const i = estado.servidores.findIndex((x) => x.id === srv.id);
+    if (i >= 0) estado.servidores[i] = { id: srv.id, nome: srv.nome, icone: srv.icone, dono: srv.dono };
+    return renderRail();
+  }
   aplicarServidor(srv);
   // o canal que eu estava foi apagado
-  if (!estado.canaisTexto.includes(estado.canalTexto)) abrirTexto(estado.canaisTexto[0]);
+  if (!canalPorId(estado.canalTexto)) abrirTexto(estado.canaisTexto[0]?.id);
   else render();
   if (!$('#modal-servidor').hidden) renderModalServidor();
 });
 
-socket.on('perfis', (perfis) => {
+socket.on('servidor:removido', ({ id, nome }) => {
+  if (id === estado.servidor.id) avisar(`O servidor ${nome} foi apagado pelo dono.`);
+});
+
+socket.on('perfis', ({ servidor, perfis }) => {
+  if (servidor !== estado.servidor.id) return;
   estado.perfis = perfis;
   render();
   if (estado.view === 'texto') renderMensagens();
   if (!$('#modal-servidor').hidden) renderModalServidor();
 });
 
-socket.on('canal:renomeado', ({ tipo, de, para }) => {
-  if (tipo === 'texto') {
-    if (estado.naoLidos.delete(de)) estado.naoLidos.add(para);
-    if (estado.canalTexto === de) {
-      estado.canalTexto = para;
-      mensagens.forEach((m) => (m.canal = para));
-    }
-  } else if (estado.voz === de) {
-    estado.voz = para;
-  }
+socket.on('canal:apagado', ({ id }) => {
+  estado.naoLidos.delete(id);
 });
 
-socket.on('canal:apagado', ({ tipo, nome }) => {
-  estado.naoLidos.delete(nome);
-  if (tipo === 'voz' && estado.voz === nome) {
-    sairVoz(false);
-    avisar(`O canal ${nome} foi apagado, então você saiu da chamada.`);
-  }
+// o canal de voz em que eu estava foi apagado (ou saí do servidor dele)
+socket.on('voz:expulso', () => {
+  if (!estado.voz) return;
+  sairVoz(false);
+  avisar('A sala em que você estava não existe mais (ou você saiu do servidor), então você saiu da chamada.');
 });
 
-// Alguém trocou o nome: o volume ajustado pra essa pessoa vai junto pro nome novo
 socket.on('renomeado', ({ de, para }) => {
   for (const tipo of ['mic', 'tela']) {
     const antigo = volumes[chaveVolume(de, tipo)];
@@ -430,10 +574,23 @@ function avatar(u, { status = false } = {}) {
   return a;
 }
 
+function renderRail() {
+  $('#lista-servidores').replaceChildren(...estado.servidores.map((srv) => {
+    const item = el('div', 'rail-item');
+    item.classList.toggle('ativo', srv.id === estado.servidor.id);
+    item.classList.toggle('nao-lido', estado.srvNaoLidos.has(srv.id));
+    item.title = srv.nome;
+    const ic = el('div', 'icone-servidor');
+    pintarIconeServidor(ic, srv);
+    item.append(el('span', 'pill'), ic);
+    item.onclick = () => { if (srv.id !== estado.servidor.id) abrirServidor(srv.id); };
+    return item;
+  }));
+}
+
 function renderServidor() {
   $('#servidor-nome').textContent = estado.servidor.nome;
-  $('#rail-servidor').title = estado.servidor.nome;
-  pintarIconeServidor($('#icone-servidor'));
+  renderRail();
   const admin = souAdmin();
   $('#btn-cfg-servidor').hidden = !admin;
   $$('.so-admin').forEach((e) => (e.hidden = !admin));
@@ -442,21 +599,21 @@ function renderServidor() {
 function renderCanais() {
   $('#canais-texto').replaceChildren(...estado.canaisTexto.map((c) => {
     const li = el('li', 'canal');
-    li.append(icone('hash'), el('span', null, c));
-    li.classList.toggle('ativo', estado.view === 'texto' && c === estado.canalTexto);
-    li.classList.toggle('nao-lido', estado.naoLidos.has(c));
-    li.onclick = () => abrirTexto(c);
+    li.append(icone('hash'), el('span', null, c.nome));
+    li.classList.toggle('ativo', estado.view === 'texto' && c.id === estado.canalTexto);
+    li.classList.toggle('nao-lido', estado.naoLidos.has(c.id));
+    li.onclick = () => abrirTexto(c.id);
     return li;
   }));
 
   $('#canais-voz').replaceChildren(...estado.canaisVoz.map((c) => {
     const li = el('li');
     const nome = el('div', 'canal');
-    nome.append(icone('voz'), el('span', null, c));
-    nome.classList.toggle('ativo', estado.view === 'voz' && c === estado.voz);
-    nome.onclick = () => entrarVoz(c);
+    nome.append(icone('voz'), el('span', null, c.nome));
+    nome.classList.toggle('ativo', estado.view === 'voz' && c.id === estado.voz);
+    nome.onclick = () => entrarVoz(c.id);
     const membros = el('ul', 'membros-voz');
-    for (const u of estado.usuarios.filter((x) => x.voz === c)) {
+    for (const u of estado.usuarios.filter((x) => x.voz === c.id)) {
       const m = el('li', 'usuario-voz');
       m.append(avatar(u), el('span', 'nome', u.nome));
       m.onclick = (e) => {
@@ -492,7 +649,10 @@ function itemMembro(u, online) {
   linha.style.color = u.cor;
   if (perfilDe(u.nome)?.admin) linha.append(icone('coroa', 'coroa'));
   nome.append(linha);
-  if (u.voz) nome.append(el('span', 'atividade', u.tela ? `Ao vivo em ${u.voz}` : `Em ${u.voz}`));
+  if (u.voz) {
+    const sala = canalPorId(u.voz)?.nome ?? 'outro servidor';
+    nome.append(el('span', 'atividade', u.tela ? `Ao vivo em ${sala}` : `Em ${sala}`));
+  }
   li.append(avatar(u, { status: online }), nome);
   li.onclick = (e) => abrirPerfil(u.nome, e);
   if (online) li.oncontextmenu = (e) => abrirMenuPessoa(u.id, e);
@@ -503,7 +663,8 @@ function renderMembros() {
   $('#membros').hidden = !estado.membrosVisiveis || estado.view === 'voz';
   $('#btn-membros').classList.toggle('ativo', estado.membrosVisiveis);
   const porNome = (a, b) => a.nome.localeCompare(b.nome);
-  const online = [...estado.usuarios].sort(porNome);
+  // só membros deste servidor (a lista também traz quem está na minha call de outro servidor)
+  const online = estado.usuarios.filter((u) => perfilPorConta(u.conta)).sort(porNome);
   const nomesOnline = new Set(online.map((u) => u.nome));
   const offline = estado.perfis.filter((p) => !nomesOnline.has(p.nome)).sort(porNome);
   $('#titulo-online').textContent = `Online — ${online.length}`;
@@ -517,7 +678,7 @@ function renderPainel() {
   const meu = estado.usuarios.find((u) => u.id === estado.eu?.id);
   if (meu) $('#meu-avatar').replaceChildren(avatar(meu, { status: true }));
   $('#painel-voz').hidden = !estado.voz;
-  $('#nome-canal-voz').textContent = estado.voz ? `${estado.voz} / ${estado.servidor.nome}` : '';
+  $('#nome-canal-voz').textContent = estado.vozInfo ? `${estado.vozInfo.canal} / ${estado.vozInfo.servidor}` : '';
 
   const semMic = estado.mudo || estado.surdo;
   $$('.btn-mudo').forEach((b) => {
@@ -538,10 +699,11 @@ function renderView() {
   $('#view-texto').hidden = naVoz;
   $('#view-voz').hidden = !naVoz;
   $('#icone-canal').replaceChildren(icone(naVoz ? 'voz' : 'hash'));
-  $('#titulo-canal').textContent = naVoz ? estado.voz : (estado.canalTexto ?? '');
-  $('#topico').textContent = naVoz ? '' : canalInfo('texto', estado.canalTexto)?.topico ?? '';
+  const texto = canalPorId(estado.canalTexto);
+  $('#titulo-canal').textContent = naVoz ? estado.vozInfo?.canal ?? '' : texto?.nome ?? '';
+  $('#topico').textContent = naVoz ? '' : texto?.topico ?? '';
   $('#btn-fixadas').hidden = naVoz;
-  $('#input-msg').placeholder = `Conversar em #${estado.canalTexto ?? ''}`;
+  $('#input-msg').placeholder = `Conversar em #${texto?.nome ?? ''}`;
 }
 
 $$('.categoria').forEach((c) => {
@@ -568,7 +730,12 @@ let editando = null; // { id, texto } da mensagem sendo editada
 const digitando = new Map(); // nome -> timeout
 
 function abrirTexto(canal) {
-  estado.canalTexto = canal;
+  estado.canalTexto = canal ?? null;
+  if (canal != null && estado.servidor.id != null) {
+    const ultimos = lerStorage('ultimoCanal', {});
+    ultimos[estado.servidor.id] = canal;
+    salvarStorage('ultimoCanal', ultimos);
+  }
   estado.view = 'texto';
   estado.naoLidos.delete(canal);
   mensagens = [];
@@ -579,7 +746,7 @@ function abrirTexto(canal) {
   $('#painel-fixadas').hidden = true;
   renderMensagens();
 
-  socket.emit('historico', canal, (rows) => {
+  if (canal != null) socket.emit('historico', canal, (rows) => {
     if (canal !== estado.canalTexto || !Array.isArray(rows)) return;
     mensagens = rows;
     renderMensagens();
@@ -710,7 +877,8 @@ function renderMensagens() {
   const box = $('#mensagens');
   const noFim = pertoDoFim(box);
   const topo = box.scrollTop;
-  const canal = estado.canalTexto ?? '';
+  const canal = canalPorId(estado.canalTexto)?.nome;
+  if (canal == null) return box.replaceChildren();
   const boas = el('div', 'boas-vindas');
   const bola = el('div', 'bola');
   bola.append(icone('hash'));
@@ -844,13 +1012,24 @@ socket.on('mensagem', (m) => {
     digitando.delete(m.autor);
     renderDigitando();
   }
-  if (m.canal === estado.canalTexto) adicionarMensagem(m);
-  if (m.canal !== estado.canalTexto || estado.view !== 'texto') {
-    estado.naoLidos.add(m.canal);
-    renderCanais();
+  const minha = m.conta === estado.eu.conta;
+  if (m.servidor !== estado.servidor.id) {
+    // mensagem em outro servidor meu: marca a bolinha na barra da esquerda
+    if (!minha) {
+      estado.srvNaoLidos.add(m.servidor);
+      renderRail();
+    }
+  } else {
+    if (m.canal === estado.canalTexto) adicionarMensagem(m);
+    if (m.canal !== estado.canalTexto || estado.view !== 'texto') {
+      estado.naoLidos.add(m.canal);
+      renderCanais();
+    }
   }
-  if (m.autor !== estado.eu.nome && !document.hasFocus() && window.Notification?.permission === 'granted') {
-    new Notification(`${m.autor} (#${m.canal})`, { body: UPLOAD_RE.test(m.texto) ? '📷 Imagem' : m.texto, silent: false });
+  if (!minha && !document.hasFocus() && window.Notification?.permission === 'granted') {
+    const srv = estado.servidores.find((x) => x.id === m.servidor)?.nome;
+    const canal = m.servidor === estado.servidor.id ? `#${canalPorId(m.canal)?.nome}` : srv;
+    new Notification(`${m.autor} (${canal})`, { body: UPLOAD_RE.test(m.texto) ? '📷 Imagem' : m.texto, silent: false });
   }
 });
 
@@ -995,6 +1174,7 @@ async function entrarVoz(canal) {
   if (estado.mic) monitorarFala(estado.eu.id, estado.mic);
 
   estado.voz = canal;
+  estado.vozInfo = { canal: canalPorId(canal)?.nome ?? '', servidor: estado.servidor.nome };
   estado.view = 'voz';
   socket.emit('voz:entrar', canal, (ids) => {
     for (const id of ids) if (!peers.has(id)) criarPeer(id);
@@ -1014,6 +1194,7 @@ function sairVoz(avisarServidor = true) {
   if (estado.eu) pararMonitor(estado.eu.id);
   if (estado.voz) som('sair');
   estado.voz = null;
+  estado.vozInfo = null;
   miniaturas(false);
   membrosVoz = new Set();
   if (estado.view === 'voz') estado.view = 'texto';
@@ -1657,7 +1838,8 @@ function mostrarPrevia(u, alvo) {
         }
       });
     }
-    const dica = el('div', 'previa-dica', u.voz === estado.voz ? 'Clique pra assistir' : `Entre em ${u.voz} pra assistir`);
+    const sala = canalPorId(u.voz)?.nome;
+    const dica = el('div', 'previa-dica', u.voz === estado.voz ? 'Clique pra assistir' : sala ? `Entre em ${sala} pra assistir` : 'Entre na call pra assistir');
     caixa.dataset.pessoa = u.id;
     caixa.replaceChildren(midia, rotulo, dica);
     caixa.hidden = false;
@@ -1802,6 +1984,7 @@ function abrirPerfil(nome, evento) {
   const titulo = el('h3', null, nome);
   if (p?.admin) titulo.append(icone('coroa', 'coroa'));
   corpo.append(titulo);
+  if (p?.dono) corpo.append(el('p', 'perfil-status', `Dono de ${estado.servidor.nome}`));
   const status = online ? (online.voz ? `Em ${online.voz}${online.tela ? ' · ao vivo' : ''}` : 'Online') : 'Offline';
   corpo.append(el('p', 'perfil-status', status));
   if (p?.bio) {
@@ -1813,7 +1996,7 @@ function abrirPerfil(nome, evento) {
     const b = el('button', 'btn-secundario', 'Editar perfil');
     b.onclick = () => { fecharPopovers(); abrirConfig(); };
     acoes.append(b);
-  } else if (p && souAdmin()) {
+  } else if (p && souAdmin() && !p.dono) {
     const b = el('button', 'btn-secundario', p.admin ? 'Remover admin' : 'Tornar admin');
     b.onclick = () => socket.emit('admin:definir', { conta: p.id, admin: !p.admin }, (res) => {
       if (res?.erro) return avisar(res.erro);
@@ -1910,6 +2093,8 @@ function renderModalServidor(forcar = false) {
   if (forcar || document.activeElement !== $('#srv-nome')) $('#srv-nome').value = srv.nome;
   pintarIconeServidor($('#srv-icone'));
   $('#btn-remover-icone').hidden = !srv.icone;
+  $('#srv-convite').textContent = srv.convite;
+  $('#srv-perigo').hidden = srv.dono !== estado.eu.conta;
   for (const tipo of ['texto', 'voz']) {
     const lista = srv.canais.filter((c) => c.tipo === tipo);
     $(`#srv-canais-${tipo}`).replaceChildren(...lista.map((c) => linhaCanal(c, lista)));
@@ -1919,9 +2104,10 @@ function renderModalServidor(forcar = false) {
     const marcar = el('input');
     marcar.type = 'checkbox';
     marcar.checked = p.admin;
+    marcar.disabled = p.dono; // o dono é sempre admin
     marcar.onchange = () => socket.emit('admin:definir', { conta: p.id, admin: marcar.checked }, respostaServidor);
     const rotulo = el('label');
-    rotulo.append(marcar, avatar(p), el('span', null, p.nome + (p.id === estado.eu.conta ? ' (você)' : '')));
+    rotulo.append(marcar, avatar(p), el('span', null, p.nome + (p.id === estado.eu.conta ? ' (você)' : '') + (p.dono ? ' · dono' : '')));
     li.append(rotulo);
     return li;
   }));
@@ -1929,6 +2115,15 @@ function renderModalServidor(forcar = false) {
 
 $('#modal-servidor').addEventListener('focusout', () => setTimeout(() => servidorPendente && renderModalServidor(), 0));
 $('#btn-cfg-servidor').onclick = () => abrirModalServidor();
+$('#btn-srv-convidar').onclick = () => { $('#modal-servidor').hidden = true; abrirConvite(); };
+$('#btn-apagar-servidor').onclick = () => {
+  const { id, nome } = estado.servidor;
+  if (!confirm(`Apagar ${nome} pra todo mundo, com todos os canais e mensagens? Não dá pra desfazer.`)) return;
+  socket.emit('servidor:apagar', id, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    $('#modal-servidor').hidden = true;
+  });
+};
 $$('.btn-add-canal').forEach((b) => (b.onclick = (e) => {
   e.stopPropagation(); // não recolhe a categoria
   abrirModalServidor(b.dataset.tipo);

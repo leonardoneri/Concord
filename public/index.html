@@ -26,7 +26,7 @@
         <input id="nome-exibicao" maxlength="32" autocomplete="nickname" placeholder="Igual ao usuário, se deixar vazio">
       </label>
       <label class="so-criar" id="campo-convite" hidden>Código de convite <span class="req">*</span>
-        <input id="convite" type="password" autocomplete="off" placeholder="Peça pra quem administra o servidor">
+        <input id="convite" autocomplete="off" spellcheck="false" placeholder="O convite que um amigo te mandou">
       </label>
       <p class="so-criar dica-login" hidden>O usuário é só pra entrar: sem espaço, de 2 a 24 letras, números, ponto, traço ou _. O nome de exibição é o que a galera vê, pode ter espaço e dá pra trocar depois.</p>
       <button type="submit" class="btn-primario" id="btn-login">Entrar</button>
@@ -37,18 +37,15 @@
 
   <div id="app" hidden>
     <nav id="rail">
-      <div class="rail-item ativo" id="rail-servidor">
-        <span class="pill"></span>
-        <div class="icone-servidor" id="icone-servidor"></div>
-      </div>
+      <div id="lista-servidores"></div>
       <div class="rail-sep"></div>
-      <button class="rail-botao btn-convidar" title="Convidar amigos" data-icone="convidar"></button>
+      <button class="rail-botao" id="btn-novo-servidor" title="Criar ou entrar num servidor">+</button>
       <button class="rail-botao trocar-servidor" title="Trocar de servidor" data-icone="sair" hidden></button>
     </nav>
 
     <aside id="sidebar">
       <header class="servidor-cab">
-        <span id="servidor-nome"></span>
+        <button type="button" class="btn-menu-servidor" id="btn-menu-servidor" title="Opções do servidor"><span id="servidor-nome"></span><span data-icone="seta"></span></button>
         <button class="btn-icone" id="btn-cfg-servidor" title="Configurações do servidor" data-icone="config" hidden></button>
         <button class="btn-icone btn-convidar" title="Convidar amigos" data-icone="convidar"></button>
       </header>
@@ -234,9 +231,17 @@
         </form>
       </section>
       <section>
+        <h3>Convite</h3>
+        <p class="dica-cfg">Código atual: <b id="srv-convite"></b> — <button type="button" class="btn-link" id="btn-srv-convidar">ver link</button></p>
+      </section>
+      <section>
         <h3>Admins</h3>
         <p class="dica-cfg">Admins criam e editam canais, fixam e apagam mensagens e mudam o servidor.</p>
         <ul class="srv-admins" id="srv-admins"></ul>
+      </section>
+      <section id="srv-perigo" hidden>
+        <h3>Zona de perigo</h3>
+        <button type="button" class="btn-perigo" id="btn-apagar-servidor">Apagar servidor</button>
       </section>
     </div>
   </div>
@@ -248,18 +253,52 @@
   <div id="modal-convite" class="modal" hidden>
     <div class="modal-caixa">
       <header>
-        <h2>Convidar amigos</h2>
+        <h2 id="convite-titulo">Convidar amigos</h2>
         <button class="btn-icone" id="btn-fechar-convite" title="Fechar" data-icone="fechar"></button>
       </header>
-      <p id="convite-dica"></p>
-      <label>Mande este link pra galera
+      <p class="dica-cfg">Quem tiver o convite cria a conta (ou entra com a que já tem) e já cai direto no servidor.</p>
+      <label>Link de convite
         <div class="linha-copiar">
           <input id="convite-link" readonly>
           <button type="button" class="btn-primario" id="btn-copiar">Copiar</button>
         </div>
       </label>
-      <p id="convite-extra"></p>
+      <p class="dica-cfg">No app Concord: botão <b>+</b> na barra da esquerda → "Entrar num servidor" e colar o código <b id="convite-codigo"></b>.</p>
+      <p class="dica-cfg" id="convite-dica"></p>
+      <button type="button" class="btn-link so-admin" id="btn-novo-convite" hidden>Gerar outro convite (o atual para de funcionar)</button>
     </div>
+  </div>
+
+  <div id="modal-novo-servidor" class="modal" hidden>
+    <div class="modal-caixa">
+      <header>
+        <h2>Seus servidores</h2>
+        <button class="btn-icone" id="btn-fechar-novo-servidor" title="Fechar" data-icone="fechar"></button>
+      </header>
+      <p class="dica-cfg" id="novo-servidor-dica">Crie um servidor pra sua galera ou entre num com o convite de um amigo.</p>
+      <form id="form-criar-servidor" class="bloco-opcao">
+        <h3>Criar meu servidor</h3>
+        <p class="dica-cfg">Você vira o dono: escolhe os canais, quem é admin e manda o convite pros amigos.</p>
+        <div class="linha-copiar">
+          <input id="novo-servidor-nome" maxlength="40" placeholder="Nome do servidor" required>
+          <button class="btn-primario verde">Criar</button>
+        </div>
+      </form>
+      <form id="form-entrar-servidor" class="bloco-opcao">
+        <h3>Entrar num servidor</h3>
+        <p class="dica-cfg">Cole o código ou o link de convite que te mandaram.</p>
+        <div class="linha-copiar">
+          <input id="entrar-convite" placeholder="ex.: aB3dE7xK ou https://…/?convite=aB3dE7xK" required spellcheck="false">
+          <button class="btn-primario">Entrar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="menu-servidor" class="popover" hidden>
+    <button type="button" class="menu-botao" id="ms-convidar">Convidar pessoas</button>
+    <button type="button" class="menu-botao so-admin" id="ms-config" hidden>Configurações do servidor</button>
+    <button type="button" class="menu-botao perigo" id="ms-sair">Sair do servidor</button>
   </div>
 
   <div id="audios" hidden></div>

@@ -2,7 +2,7 @@
 
 O contrário do Discord. 😄
 
-O Concord é um app feito pra galera jogar junto: chat por canais, chamada de voz, câmera e compartilhamento de tela com até 60 fps, tudo rodando no PC de um de vocês, sem conta e sem mensalidade.
+O Concord é um app feito pra galera jogar junto: servidores com canais de texto, chamada de voz, câmera e compartilhamento de tela com até 60 fps, sem mensalidade.
 
 ## Instalar
 
@@ -14,7 +14,11 @@ Pronto. Você só instala uma vez: quando sair versão nova, o Concord avisa e �
 
 ## Primeiro uso
 
-- **Vai hospedar?** Clique em **Criar servidor e entrar**, escolha seu nome e use o botão **Convidar** pra copiar o link e mandar pra galera. Deixe o app aberto enquanto o pessoal usa.
-- **Vai entrar?** Cole o link que te mandaram em **Entrar com convite** e clique em **Entrar**.
+1. Abra o app e clique em **Criar conta**. Se te mandaram um convite, cole o código dele em **Código de convite**.
+2. Depois de entrar:
+   - **Quer um servidor pra sua galera?** Clique em **Criar meu servidor**. Você vira o dono e já aparece o link de convite pra mandar pros amigos.
+   - **Te convidaram?** Clique no **+** da barra da esquerda → **Entrar num servidor** e cole o código ou o link.
+
+Pra convidar mais gente depois, clique no nome do servidor (no topo) → **Convidar pessoas**.
 
 Não quer instalar? Dá pra abrir o link do convite direto no Chrome ou no Edge. Só o compartilhamento de tela funciona melhor pelo app.

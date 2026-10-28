@@ -929,3 +929,44 @@ textarea {
 .previa-vazia { display: grid; place-items: center; font-size: 13px; color: var(--texto-2); }
 .previa-rotulo { display: flex; align-items: center; gap: 6px; padding: 8px 10px 0; font-weight: 600; color: var(--forte); font-size: 14px; }
 .previa-dica { padding: 2px 10px 10px; font-size: 12px; color: var(--texto-2); }
+
+/* ---------- vários servidores ---------- */
+#lista-servidores { display: flex; flex-direction: column; gap: 8px; width: 100%; overflow-y: auto; scrollbar-width: none; }
+#rail { overflow: hidden; }
+.rail-item .pill { height: 0; margin-top: 0; transition: height .15s, margin-top .15s; }
+.rail-item.nao-lido .pill { height: 8px; margin-top: -4px; }
+.rail-item:hover .pill { height: 20px; margin-top: -10px; }
+.rail-item.ativo .pill { height: 40px; margin-top: -20px; }
+.rail-item .icone-servidor { border-radius: 50%; transition: border-radius .15s; }
+.rail-item:hover .icone-servidor, .rail-item.ativo .icone-servidor { border-radius: 16px; }
+#btn-novo-servidor { font-size: 26px; font-weight: 400; line-height: 1; }
+#btn-novo-servidor:hover { background: var(--verde); }
+
+.btn-menu-servidor {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--forte);
+  text-align: left;
+  height: 100%;
+}
+.btn-menu-servidor .ic { width: 16px; height: 16px; flex: none; }
+#menu-servidor { position: fixed; padding: 6px 8px; display: grid; gap: 2px; }
+.menu-botao.perigo { color: var(--vermelho); }
+.menu-botao.perigo:hover { background: var(--vermelho); color: #fff; }
+.btn-primario.verde { background: var(--verde); }
+.btn-primario.verde:hover { filter: brightness(1.1); }
+.btn-perigo { justify-self: start; background: var(--vermelho); color: #fff; border-radius: 4px; padding: 9px 16px; font-weight: 500; }
+.btn-perigo:hover { filter: brightness(1.1); }
+.bloco-opcao { display: grid; gap: 8px; padding: 14px; background: #2b2d31; border-radius: 8px; }
+.bloco-opcao h3 { margin: 0; font-size: 16px; color: var(--forte); }
+.bloco-opcao .dica-cfg { margin: 0; }
+#convite-codigo { color: var(--forte); user-select: all; }
+
+/* sem nenhum servidor: só a barra da esquerda e a tela de criar/entrar */
+#app.sem-servidor #sidebar > :not(.painel-usuario):not(#painel-voz),
+#app.sem-servidor main > * { visibility: hidden; }
