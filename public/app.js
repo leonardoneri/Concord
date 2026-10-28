@@ -40,6 +40,11 @@ const ICONES = {
   fechar: '<path d="M18 6 6 18M6 6l12 12"/>',
   convidar: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/>',
 };
+ICONES.lapis = '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>';
+ICONES.lixo = '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>';
+ICONES.pino = '<path d="M12 17v5M9 3h6l-1 7 4 3v2H6v-2l4-3z"/>';
+ICONES.cima = '<path d="m18 15-6-6-6 6"/>';
+ICONES.coroa = '<path fill="currentColor" stroke="none" d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/>';
 ICONES.micOff = ICONES.mic + CORTE;
 ICONES.foneOff = ICONES.fone + CORTE;
 
@@ -55,6 +60,8 @@ $$('[data-icone]').forEach((e) => e.prepend(icone(e.dataset.icone)));
 // ---------- estado ----------
 const estado = {
   eu: null,
+  servidor: { nome: '', icone: null, canais: [] },
+  perfis: [], // todas as contas (online e offline): { id, nome, cor, avatar, bio, admin }
   canaisTexto: [],
   canaisVoz: [],
   iceServers: [],
@@ -75,6 +82,8 @@ const estado = {
 // id do outro usuário -> { pc, polite, makingOffer, ignoreOffer, streams, senders, fila }
 const peers = new Map();
 const volumes = lerStorage('volumes', {});
+// por nome: { mudo, ocultarCam, ocultarTela, baixa } — só vale pra mim
+const ajustes = lerStorage('ajustes', {});
 const dispositivos = lerStorage('dispositivos', { mic: '', cam: '', saida: '' });
 const transmissao = lerStorage('transmissao', { resolucao: '1080', fps: 30 });
 
@@ -251,18 +260,77 @@ function entrar() {
       return;
     }
     const primeiraVez = !estado.eu;
-    estado.eu = { id: res.id, nome: res.nome, usuario: res.usuario };
-    estado.canaisTexto = res.canaisTexto;
-    estado.canaisVoz = res.canaisVoz;
+    estado.eu = { id: res.id, conta: res.conta, nome: res.nome, usuario: res.usuario };
+    estado.perfis = res.perfis;
+    aplicarServidor(res.servidor);
     estado.iceServers = res.iceServers;
     if (primeiraVez) aplicarPrefs(res.prefs);
     $('#login').hidden = true;
     $('#app').hidden = false;
     $('#meu-nome').textContent = res.nome;
     if (primeiraVez && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
-    abrirTexto(primeiraVez ? res.canaisTexto[0] : estado.canalTexto);
+    const canal = estado.canaisTexto.includes(estado.canalTexto) ? estado.canalTexto : estado.canaisTexto[0];
+    abrirTexto(canal);
   });
 }
+
+// ---------- servidor (nome, ícone, canais) e perfis ----------
+function aplicarServidor(srv) {
+  estado.servidor = srv;
+  estado.canaisTexto = srv.canais.filter((c) => c.tipo === 'texto').map((c) => c.nome);
+  estado.canaisVoz = srv.canais.filter((c) => c.tipo === 'voz').map((c) => c.nome);
+  document.title = srv.nome ? `${srv.nome} · Concord` : 'Concord';
+}
+
+const perfilDe = (nome) => estado.perfis.find((p) => p.nome === nome);
+const perfilPorConta = (id) => estado.perfis.find((p) => p.id === id);
+const souAdmin = () => !!perfilPorConta(estado.eu?.conta)?.admin;
+const canalInfo = (tipo, nome) => estado.servidor.canais.find((c) => c.tipo === tipo && c.nome === nome);
+
+function iniciais(nome) {
+  return nome.split(/\s+/).filter(Boolean).slice(0, 3).map((p) => [...p][0]).join('').toUpperCase() || '?';
+}
+function pintarIconeServidor(e) {
+  const { nome, icone } = estado.servidor;
+  e.textContent = icone ? '' : iniciais(nome);
+  e.style.backgroundImage = icone ? `url("${icone}")` : '';
+  e.classList.toggle('com-imagem', !!icone);
+}
+
+socket.on('servidor', (srv) => {
+  aplicarServidor(srv);
+  // o canal que eu estava foi apagado
+  if (!estado.canaisTexto.includes(estado.canalTexto)) abrirTexto(estado.canaisTexto[0]);
+  else render();
+  if (!$('#modal-servidor').hidden) renderModalServidor();
+});
+
+socket.on('perfis', (perfis) => {
+  estado.perfis = perfis;
+  render();
+  if (estado.view === 'texto') renderMensagens();
+  if (!$('#modal-servidor').hidden) renderModalServidor();
+});
+
+socket.on('canal:renomeado', ({ tipo, de, para }) => {
+  if (tipo === 'texto') {
+    if (estado.naoLidos.delete(de)) estado.naoLidos.add(para);
+    if (estado.canalTexto === de) {
+      estado.canalTexto = para;
+      mensagens.forEach((m) => (m.canal = para));
+    }
+  } else if (estado.voz === de) {
+    estado.voz = para;
+  }
+});
+
+socket.on('canal:apagado', ({ tipo, nome }) => {
+  estado.naoLidos.delete(nome);
+  if (tipo === 'voz' && estado.voz === nome) {
+    sairVoz(false);
+    avisar(`O canal ${nome} foi apagado, então você saiu da chamada.`);
+  }
+});
 
 // Alguém trocou o nome: o volume ajustado pra essa pessoa vai junto pro nome novo
 socket.on('renomeado', ({ de, para }) => {
@@ -273,6 +341,11 @@ socket.on('renomeado', ({ de, para }) => {
     delete volumes[chaveVolume(de, tipo)];
   }
   salvarStorage('volumes', volumes);
+  if (ajustes[de]) {
+    ajustes[para] = ajustes[de];
+    delete ajustes[de];
+    salvarStorage('ajustes', ajustes);
+  }
   if (estado.eu?.nome === de) {
     estado.eu.nome = para;
     $('#meu-nome').textContent = para;
@@ -286,6 +359,8 @@ socket.on('renomeado', ({ de, para }) => {
 // Volume de cada pessoa, qualidade da tela etc. vão pro servidor; microfone/câmera ficam por PC
 function aplicarPrefs(prefs = {}) {
   if (prefs.volumes) Object.assign(volumes, prefs.volumes);
+  if (prefs.ajustes) Object.assign(ajustes, prefs.ajustes);
+  salvarStorage('ajustes', ajustes);
   if (prefs.transmissao) Object.assign(transmissao, prefs.transmissao);
   if (typeof prefs.membrosVisiveis === 'boolean') estado.membrosVisiveis = prefs.membrosVisiveis;
   salvarStorage('volumes', volumes);
@@ -297,7 +372,7 @@ let prefsTimer;
 function sincronizarPrefs() {
   clearTimeout(prefsTimer);
   prefsTimer = setTimeout(() => {
-    socket.emit('prefs', { volumes, transmissao, membrosVisiveis: estado.membrosVisiveis });
+    socket.emit('prefs', { volumes, ajustes, transmissao, membrosVisiveis: estado.membrosVisiveis });
   }, 1000);
 }
 
@@ -333,6 +408,7 @@ socket.on('presenca', (lista) => {
 
 // ---------- render ----------
 function render() {
+  renderServidor();
   renderCanais();
   renderMembros();
   renderPainel();
@@ -341,12 +417,26 @@ function render() {
 }
 
 function avatar(u, { status = false } = {}) {
-  const a = el('span', 'avatar', [...u.nome][0]?.toUpperCase() ?? '?');
-  a.style.background = u.cor;
+  const perfil = perfilDe(u.nome);
+  const a = el('span', 'avatar', perfil?.avatar ? '' : [...u.nome][0]?.toUpperCase() ?? '?');
+  a.style.background = perfil?.cor ?? u.cor;
+  if (perfil?.avatar) {
+    a.style.backgroundImage = `url("${perfil.avatar}")`;
+    a.classList.add('com-foto');
+  }
   if (u.id) a.dataset.fala = u.id;
   a.classList.toggle('falando', falando.has(u.id));
   if (status) a.append(el('span', 'status-dot'));
   return a;
+}
+
+function renderServidor() {
+  $('#servidor-nome').textContent = estado.servidor.nome;
+  $('#rail-servidor').title = estado.servidor.nome;
+  pintarIconeServidor($('#icone-servidor'));
+  const admin = souAdmin();
+  $('#btn-cfg-servidor').hidden = !admin;
+  $$('.so-admin').forEach((e) => (e.hidden = !admin));
 }
 
 function renderCanais() {
@@ -369,6 +459,21 @@ function renderCanais() {
     for (const u of estado.usuarios.filter((x) => x.voz === c)) {
       const m = el('li', 'usuario-voz');
       m.append(avatar(u), el('span', 'nome', u.nome));
+      m.onclick = (e) => {
+        if (u.tela && u.voz === estado.voz) {
+          e.stopPropagation();
+          esconderPrevia();
+          estado.view = 'voz';
+          return render();
+        }
+        abrirPerfil(u.nome, e);
+      };
+      m.oncontextmenu = (e) => abrirMenuPessoa(u.id, e);
+      if (u.tela) {
+        m.onmouseenter = () => mostrarPrevia(u, m);
+        m.onmouseleave = esconderPrevia;
+      }
+      if (u.id !== estado.eu.id && ajustes[u.nome]?.mudo) m.classList.add('silenciado-pra-mim');
       if (u.tela) m.append(el('span', 'badge-vivo', 'AO VIVO'));
       if (u.camera) m.append(icone('camera'));
       if (u.surdo) m.append(icone('foneOff'));
@@ -380,26 +485,39 @@ function renderCanais() {
   }));
 }
 
+function itemMembro(u, online) {
+  const li = el('li', online ? 'membro' : 'membro offline');
+  const nome = el('span', 'nome');
+  const linha = el('span', 'nome-linha', u.nome);
+  linha.style.color = u.cor;
+  if (perfilDe(u.nome)?.admin) linha.append(icone('coroa', 'coroa'));
+  nome.append(linha);
+  if (u.voz) nome.append(el('span', 'atividade', u.tela ? `Ao vivo em ${u.voz}` : `Em ${u.voz}`));
+  li.append(avatar(u, { status: online }), nome);
+  li.onclick = (e) => abrirPerfil(u.nome, e);
+  if (online) li.oncontextmenu = (e) => abrirMenuPessoa(u.id, e);
+  return li;
+}
+
 function renderMembros() {
   $('#membros').hidden = !estado.membrosVisiveis || estado.view === 'voz';
   $('#btn-membros').classList.toggle('ativo', estado.membrosVisiveis);
-  $('#titulo-online').textContent = `Online — ${estado.usuarios.length}`;
-  const ordenados = [...estado.usuarios].sort((a, b) => a.nome.localeCompare(b.nome));
-  $('#online').replaceChildren(...ordenados.map((u) => {
-    const li = el('li', 'membro');
-    const nome = el('span', 'nome', u.nome);
-    nome.style.color = u.cor;
-    if (u.voz) nome.append(el('span', 'atividade', u.tela ? `Ao vivo em ${u.voz}` : `Em ${u.voz}`));
-    li.append(avatar(u, { status: true }), nome);
-    return li;
-  }));
+  const porNome = (a, b) => a.nome.localeCompare(b.nome);
+  const online = [...estado.usuarios].sort(porNome);
+  const nomesOnline = new Set(online.map((u) => u.nome));
+  const offline = estado.perfis.filter((p) => !nomesOnline.has(p.nome)).sort(porNome);
+  $('#titulo-online').textContent = `Online — ${online.length}`;
+  $('#online').replaceChildren(...online.map((u) => itemMembro(u, true)));
+  $('#titulo-offline').hidden = !offline.length;
+  $('#titulo-offline').textContent = `Offline — ${offline.length}`;
+  $('#offline').replaceChildren(...offline.map((p) => itemMembro(p, false)));
 }
 
 function renderPainel() {
   const meu = estado.usuarios.find((u) => u.id === estado.eu?.id);
   if (meu) $('#meu-avatar').replaceChildren(avatar(meu, { status: true }));
   $('#painel-voz').hidden = !estado.voz;
-  $('#nome-canal-voz').textContent = estado.voz ? `${estado.voz} / Amiguinhos Gamer` : '';
+  $('#nome-canal-voz').textContent = estado.voz ? `${estado.voz} / ${estado.servidor.nome}` : '';
 
   const semMic = estado.mudo || estado.surdo;
   $$('.btn-mudo').forEach((b) => {
@@ -421,15 +539,10 @@ function renderView() {
   $('#view-voz').hidden = !naVoz;
   $('#icone-canal').replaceChildren(icone(naVoz ? 'voz' : 'hash'));
   $('#titulo-canal').textContent = naVoz ? estado.voz : (estado.canalTexto ?? '');
-  $('#topico').textContent = naVoz ? '' : TOPICOS[estado.canalTexto] ?? '';
+  $('#topico').textContent = naVoz ? '' : canalInfo('texto', estado.canalTexto)?.topico ?? '';
+  $('#btn-fixadas').hidden = naVoz;
   $('#input-msg').placeholder = `Conversar em #${estado.canalTexto ?? ''}`;
 }
-
-const TOPICOS = {
-  geral: 'Papo geral da galera',
-  jogos: 'Bora marcar aquela partida',
-  memes: 'Só os melhores (ou não)',
-};
 
 $$('.categoria').forEach((c) => {
   c.onclick = () => {
@@ -450,27 +563,26 @@ $('#btn-menu').onclick = () => $('#app').classList.toggle('menu-aberto');
 const fecharMenu = () => $('#app').classList.remove('menu-aberto');
 
 // ---------- chat ----------
-let ultimaMsg = null;
+let mensagens = []; // mensagens do canal aberto, em ordem
+let editando = null; // { id, texto } da mensagem sendo editada
 const digitando = new Map(); // nome -> timeout
 
 function abrirTexto(canal) {
   estado.canalTexto = canal;
   estado.view = 'texto';
   estado.naoLidos.delete(canal);
-  ultimaMsg = null;
+  mensagens = [];
+  editando = null;
   digitando.forEach(clearTimeout);
   digitando.clear();
   renderDigitando();
-
-  const boas = el('div', 'boas-vindas');
-  const bola = el('div', 'bola');
-  bola.append(icone('hash'));
-  boas.append(bola, el('h2', null, `Bem-vindo(a) a #${canal}!`), el('p', null, `Este é o começo do canal #${canal}.`));
-  $('#mensagens').replaceChildren(boas);
+  $('#painel-fixadas').hidden = true;
+  renderMensagens();
 
   socket.emit('historico', canal, (rows) => {
-    if (canal !== estado.canalTexto) return;
-    rows.forEach(adicionarMensagem);
+    if (canal !== estado.canalTexto || !Array.isArray(rows)) return;
+    mensagens = rows;
+    renderMensagens();
     rolarProFim();
   });
   fecharMenu();
@@ -528,33 +640,203 @@ function fmtCabecalho(d) {
   return `${d.toLocaleDateString('pt-BR')} ${fmtHora(d)}`;
 }
 
-function adicionarMensagem(m) {
-  const box = $('#mensagens');
-  const pertoDoFim = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-  const data = new Date(m.criado_em);
+const pertoDoFim = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+const minhaMensagem = (m) => m.conta != null && m.conta === estado.eu?.conta;
 
-  const novoDia = !ultimaMsg || new Date(ultimaMsg.criado_em).toDateString() !== data.toDateString();
+// Uma mensagem vira [divisor de data?, linha]; `anterior` decide se agrupa com a de cima
+function criarMensagem(m, anterior) {
+  const nos = [];
+  const data = new Date(m.criado_em);
+  const novoDia = !anterior || new Date(anterior.criado_em).toDateString() !== data.toDateString();
   if (novoDia) {
     const div = el('div', 'divisor-data');
     div.append(el('span', null, data.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' })));
-    box.append(div);
+    nos.push(div);
   }
-  const agrupar = !novoDia && ultimaMsg.autor === m.autor && m.criado_em - ultimaMsg.criado_em < 7 * 60e3;
+  const agrupar = !novoDia && anterior.autor === m.autor && m.criado_em - anterior.criado_em < 7 * 60e3;
 
   const linha = el('div', agrupar ? 'msg' : 'msg inicio');
+  linha.dataset.id = m.id;
+  linha.classList.toggle('fixada', !!m.fixada);
+  const corpo = editando?.id === m.id ? editorMensagem(m) : corpoMensagem(m);
   if (agrupar) {
-    linha.append(el('span', 'hora-lateral', fmtHora(data)), formatarTexto(m.texto));
+    linha.append(el('span', 'hora-lateral', fmtHora(data)), corpo);
   } else {
     const cab = el('div', 'cabecalho');
     const autor = el('span', 'autor', m.autor);
-    autor.style.color = m.cor;
+    autor.style.color = perfilDe(m.autor)?.cor ?? m.cor;
+    autor.onclick = (e) => abrirPerfil(m.autor, e);
     cab.append(autor, el('span', 'hora', fmtCabecalho(data)));
-    linha.append(avatar({ nome: m.autor, cor: m.cor }), cab, formatarTexto(m.texto));
+    const av = avatar({ nome: m.autor, cor: m.cor });
+    av.onclick = (e) => abrirPerfil(m.autor, e);
+    linha.append(av, cab, corpo);
   }
-  box.append(linha);
-  ultimaMsg = m;
-  if (pertoDoFim || m.autor === estado.eu.nome) rolarProFim();
+  const acoes = acoesMensagem(m);
+  if (acoes) linha.append(acoes);
+  nos.push(linha);
+  return nos;
 }
+
+function corpoMensagem(m) {
+  const corpo = formatarTexto(m.texto);
+  if (m.editado_em) {
+    const tag = el('span', 'editada', ' (editada)');
+    tag.title = new Date(m.editado_em).toLocaleString('pt-BR');
+    corpo.append(tag);
+  }
+  return corpo;
+}
+
+function acoesMensagem(m) {
+  const minha = minhaMensagem(m);
+  const botoes = [];
+  const botao = (nome, titulo, acao) => {
+    const b = el('button', null);
+    b.title = titulo;
+    b.append(icone(nome));
+    b.onclick = acao;
+    botoes.push(b);
+  };
+  if (minha && !UPLOAD_RE.test(m.texto)) botao('lapis', 'Editar', () => iniciarEdicao(m));
+  if (souAdmin()) botao('pino', m.fixada ? 'Desafixar' : 'Fixar', () => fixarMensagem(m, !m.fixada));
+  if (minha || souAdmin()) botao('lixo', 'Apagar (Shift+clique apaga sem perguntar)', (e) => apagarMensagem(m, e));
+  if (!botoes.length) return null;
+  const caixa = el('div', 'acoes-msg');
+  caixa.append(...botoes);
+  return caixa;
+}
+
+function renderMensagens() {
+  const box = $('#mensagens');
+  const noFim = pertoDoFim(box);
+  const topo = box.scrollTop;
+  const canal = estado.canalTexto ?? '';
+  const boas = el('div', 'boas-vindas');
+  const bola = el('div', 'bola');
+  bola.append(icone('hash'));
+  boas.append(bola, el('h2', null, `Bem-vindo(a) a #${canal}!`), el('p', null, `Este é o começo do canal #${canal}.`));
+  box.replaceChildren(boas, ...mensagens.flatMap((m, i) => criarMensagem(m, mensagens[i - 1])));
+  if (noFim) rolarProFim();
+  else box.scrollTop = topo;
+  box.querySelector('.editar-msg')?.focus();
+}
+
+function adicionarMensagem(m) {
+  const box = $('#mensagens');
+  const noFim = pertoDoFim(box);
+  box.append(...criarMensagem(m, mensagens[mensagens.length - 1]));
+  mensagens.push(m);
+  if (noFim || minhaMensagem(m)) rolarProFim();
+}
+
+// ---------- editar / apagar / fixar ----------
+function iniciarEdicao(m) {
+  editando = { id: m.id, texto: m.texto };
+  renderMensagens();
+}
+
+function editorMensagem(m) {
+  const caixa = el('div', 'editor-msg');
+  const campo = el('textarea', 'editar-msg');
+  campo.value = editando.texto;
+  campo.maxLength = 2000;
+  campo.rows = Math.min(8, campo.value.split('\n').length);
+  campo.oninput = () => (editando.texto = campo.value);
+  campo.onkeydown = (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      editando = null;
+      renderMensagens();
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      salvarEdicao(m.id, campo.value);
+    }
+  };
+  const dica = el('div', 'dica-editar');
+  dica.append('Esc pra ', el('b', null, 'cancelar'), ' • Enter pra ', el('b', null, 'salvar'));
+  caixa.append(campo, dica);
+  return caixa;
+}
+
+function salvarEdicao(id, texto) {
+  texto = texto.trim();
+  const original = mensagens.find((m) => m.id === id);
+  if (!texto || texto === original?.texto) {
+    editando = null;
+    return renderMensagens();
+  }
+  socket.emit('msg:editar', { id, texto }, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    editando = null;
+    renderMensagens();
+  });
+}
+
+function apagarMensagem(m, e) {
+  if (!e.shiftKey && !confirm('Apagar esta mensagem? Não dá pra desfazer.')) return;
+  socket.emit('msg:apagar', m.id, (res) => res?.erro && avisar(res.erro));
+}
+
+function fixarMensagem(m, fixar) {
+  socket.emit('msg:fixar', { id: m.id, fixar }, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    avisar(fixar ? '📌 Mensagem fixada' : 'Mensagem desafixada', 2000);
+  });
+}
+
+socket.on('msg:atualizada', (m) => {
+  const i = mensagens.findIndex((x) => x.id === m.id);
+  if (i >= 0) {
+    mensagens[i] = m;
+    renderMensagens();
+  }
+  if (!$('#painel-fixadas').hidden && m.canal === estado.canalTexto) carregarFixadas();
+});
+
+socket.on('msg:apagada', ({ id, canal }) => {
+  if (canal !== estado.canalTexto) return;
+  mensagens = mensagens.filter((m) => m.id !== id);
+  if (editando?.id === id) editando = null;
+  renderMensagens();
+  if (!$('#painel-fixadas').hidden) carregarFixadas();
+});
+
+// ---------- mensagens fixadas ----------
+function carregarFixadas() {
+  const canal = estado.canalTexto;
+  socket.emit('fixadas', canal, (lista) => {
+    if (canal !== estado.canalTexto || !Array.isArray(lista)) return;
+    const box = $('#lista-fixadas');
+    if (!lista.length) {
+      box.replaceChildren(el('p', 'vazio', 'Nenhuma mensagem fixada neste canal ainda.'));
+      return;
+    }
+    box.replaceChildren(...lista.map((m) => {
+      const item = el('div', 'fixada-item');
+      const cab = el('div', 'cabecalho');
+      const autor = el('span', 'autor', m.autor);
+      autor.style.color = perfilDe(m.autor)?.cor ?? m.cor;
+      cab.append(avatar({ nome: m.autor, cor: m.cor }), autor, el('span', 'hora', fmtCabecalho(new Date(m.criado_em))));
+      item.append(cab, formatarTexto(m.texto));
+      if (souAdmin()) {
+        const b = el('button', 'btn-link', 'Desafixar');
+        b.onclick = () => fixarMensagem(m, false);
+        item.append(b);
+      }
+      return item;
+    }));
+  });
+}
+
+$('#btn-fixadas').onclick = (e) => {
+  e.stopPropagation();
+  const painel = $('#painel-fixadas');
+  painel.hidden = !painel.hidden;
+  if (!painel.hidden) {
+    $('#lista-fixadas').replaceChildren(el('p', 'vazio', 'Carregando…'));
+    carregarFixadas();
+  }
+};
 
 socket.on('mensagem', (m) => {
   if (digitando.has(m.autor)) {
@@ -732,6 +1014,7 @@ function sairVoz(avisarServidor = true) {
   if (estado.eu) pararMonitor(estado.eu.id);
   if (estado.voz) som('sair');
   estado.voz = null;
+  miniaturas(false);
   membrosVoz = new Set();
   if (estado.view === 'voz') estado.view = 'texto';
   if (avisarServidor) socket.emit('voz:sair');
@@ -783,12 +1066,17 @@ function ajustarBitrates() {
   for (const p of peers.values()) {
     for (const tipo of ['cam', 'tela']) {
       const { max, min, total } = limitesBitrate(tipo);
-      const alvo = Math.round(Math.max(min, Math.min(max, total / n)));
+      const pedido = p.pedido?.[tipo] ?? 'normal';
+      let alvo = Math.round(Math.max(min, Math.min(max, total / n)));
+      if (pedido === 'baixa') alvo = Math.min(alvo, tipo === 'tela' ? 800_000 : 250_000);
       for (const sender of p.senders[tipo]) {
         if (sender.track?.kind !== 'video') continue;
         const params = sender.getParameters();
         if (!params.encodings?.length) continue; // ainda negociando: tenta de novo ao conectar
-        params.encodings[0].maxBitrate = alvo;
+        const enc = params.encodings[0];
+        enc.maxBitrate = alvo;
+        enc.active = pedido !== 'pausa'; // a pessoa ocultou meu vídeo: nem gasta upload com ela
+        enc.scaleResolutionDownBy = pedido === 'baixa' ? 2 : 1;
         sender.setParameters(params).catch(() => {});
       }
     }
@@ -828,7 +1116,10 @@ function criarPeer(id) {
     if (candidate) socket.emit('sinal', { para: id, dados: { candidate } });
   };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') ajustarBitrates();
+    if (pc.connectionState === 'connected') {
+      ajustarBitrates();
+      enviarPedido(id);
+    }
   };
   let reiniciou = false;
   pc.oniceconnectionstatechange = () => {
@@ -872,9 +1163,26 @@ function fecharPeer(id) {
   renderGrid();
 }
 
-async function processarSinal(peer, { description, candidate }, de) {
+// O que eu quero receber de cada pessoa: { cam, tela } = 'normal' | 'baixa' | 'pausa'
+function pedidoPara(nome) {
+  const a = ajustes[nome] ?? {};
+  const nivel = (oculto) => (oculto ? 'pausa' : a.baixa ? 'baixa' : 'normal');
+  return { cam: nivel(a.ocultarCam), tela: nivel(a.ocultarTela) };
+}
+function enviarPedido(id) {
+  const u = estado.usuarios.find((x) => x.id === id);
+  if (u && peers.has(id)) socket.emit('sinal', { para: id, dados: { pedido: pedidoPara(u.nome) } });
+}
+
+async function processarSinal(peer, { description, candidate, pedido }, de) {
   const { pc } = peer;
   if (pc.signalingState === 'closed') return;
+  if (pedido) {
+    const valido = (v) => (['baixa', 'pausa'].includes(v) ? v : 'normal');
+    peer.pedido = { cam: valido(pedido.cam), tela: valido(pedido.tela) };
+    ajustarBitrates();
+    return;
+  }
   if (description) {
     const colisao = description.type === 'offer' && (peer.makingOffer || pc.signalingState !== 'stable');
     peer.ignoreOffer = !peer.polite && colisao;
@@ -955,6 +1263,7 @@ async function alternarTela() {
     for (const p of peers.values()) enviarTrilhas(p, 'tela', estado.tela);
     ajustarBitrates();
   }
+  miniaturas(!!estado.tela);
   enviarEstado();
   render();
 }
@@ -970,6 +1279,7 @@ function pararStream(tipo) {
     p.senders[tipo] = [];
   }
   estado[tipo] = null;
+  if (tipo === 'tela') miniaturas(false);
 }
 
 function alternarMudo() {
@@ -1022,8 +1332,11 @@ function renderGrid() {
       const peer = peers.get(u.id);
       const cam = local ? estado.cam : peer?.streams.get(u.camera);
       const tela = local ? estado.tela : peer?.streams.get(u.tela);
-      if (temVideo(tela)) desejados.push({ chave: `${u.id}:tela`, u, tipo: 'tela', stream: tela, local });
-      desejados.push({ chave: `${u.id}:cam`, u, tipo: 'cam', stream: temVideo(cam) ? cam : null, local });
+      const a = local ? {} : ajustes[u.nome] ?? {};
+      if (temVideo(tela)) {
+        desejados.push({ chave: `${u.id}:tela`, u, tipo: 'tela', stream: a.ocultarTela ? null : tela, local, oculto: !!a.ocultarTela });
+      }
+      desejados.push({ chave: `${u.id}:cam`, u, tipo: 'cam', stream: temVideo(cam) && !a.ocultarCam ? cam : null, local });
     }
   }
 
@@ -1058,16 +1371,11 @@ function criarTile(d) {
     const vol = el('input');
     vol.type = 'range';
     vol.min = 0;
-    vol.max = 1;
+    vol.max = 2;
     vol.step = 0.05;
     vol.title = d.tipo === 'tela' ? 'Volume da transmissão' : 'Volume do usuário';
     vol.value = volumeDe(d.u.nome, tipoVol);
-    vol.oninput = () => {
-      volumes[chaveVolume(d.u.nome, tipoVol)] = Number(vol.value);
-      salvarStorage('volumes', volumes);
-      sincronizarPrefs();
-      renderGrid();
-    };
+    vol.oninput = () => mudarVolume(d.u.nome, tipoVol, Number(vol.value));
     vol.ondblclick = (e) => e.stopPropagation();
     rotulo.append(vol);
   }
@@ -1078,6 +1386,7 @@ function criarTile(d) {
   rotulo.append(cheia);
 
   tile.ondblclick = () => telaCheia(tile);
+  if (!d.local) tile.oncontextmenu = (e) => abrirMenuPessoa(d.u.id, e);
   return tile;
 }
 
@@ -1092,10 +1401,11 @@ function atualizarTile(tile, d) {
     video.srcObject = d.stream;
     if (d.stream) video.play().catch(() => {});
   }
-  // só o vídeo da tela de outra pessoa toca som; a voz vai pelos <audio>
-  video.muted = d.local || d.tipo === 'cam' || estado.surdo;
-  video.volume = volumeDe(d.u.nome, 'tela');
+  // o som (voz e áudio da tela) vai pelos <audio> em #audios; o vídeo é só imagem
+  video.muted = true;
   video.classList.toggle('espelhado', d.local && d.tipo === 'cam');
+  const vol = tile.querySelector('.rotulo input[type=range]');
+  if (vol && document.activeElement !== vol) vol.value = volumeDe(d.u.nome, d.tipo === 'tela' ? 'tela' : 'mic');
   tile.classList.toggle('com-video', !!d.stream);
   tile.classList.toggle('falando', d.tipo === 'cam' && falando.has(d.u.id));
   tile.style.setProperty('--tile-cor', `color-mix(in srgb, ${d.u.cor} 35%, #1e1f22)`);
@@ -1105,6 +1415,8 @@ function atualizarTile(tile, d) {
   nome.replaceChildren();
   if (d.tipo === 'tela') nome.append(el('span', 'badge-vivo', 'AO VIVO'));
   nome.append(d.u.nome + (d.local ? ' (você)' : ''));
+  if (d.oculto) nome.append(el('span', 'info-tela', 'transmissão oculta'));
+  if (!d.local && ajustes[d.u.nome]?.mudo && d.tipo === 'cam') nome.append(el('span', 'info-tela', 'silenciado pra você'));
   // no seu próprio quadro da tela: o que está sendo capturado de verdade
   if (d.local && d.tipo === 'tela') {
     const { height, frameRate } = d.stream.getVideoTracks()[0]?.getSettings() ?? {};
@@ -1114,41 +1426,233 @@ function atualizarTile(tile, d) {
   else if (d.tipo === 'cam' && d.u.mudo) nome.append(icone('micOff'));
 }
 
+const reforcos = new Map(); // "id:tipo" -> { stream, src, ganho } para volume acima de 100%
+
+function mudarVolume(nome, tipo, valor) {
+  volumes[chaveVolume(nome, tipo)] = valor;
+  salvarStorage('volumes', volumes);
+  sincronizarPrefs();
+  atualizarAudios();
+}
+
+function mudarAjuste(nome, chave, valor) {
+  const a = { ...ajustes[nome], [chave]: valor };
+  if (!valor) delete a[chave];
+  if (Object.keys(a).length) ajustes[nome] = a;
+  else delete ajustes[nome];
+  salvarStorage('ajustes', ajustes);
+  sincronizarPrefs();
+  const u = estado.usuarios.find((x) => x.nome === nome);
+  if (u) enviarPedido(u.id);
+  renderGrid();
+}
+
+function ajustarReforco(chave, stream, ganho) {
+  let r = reforcos.get(chave);
+  if (ganho <= 1 || !audioCtx) {
+    if (r) {
+      r.src.disconnect();
+      reforcos.delete(chave);
+    }
+    return false;
+  }
+  if (r?.stream !== stream) {
+    r?.src.disconnect();
+    const src = audioCtx.createMediaStreamSource(stream);
+    const g = audioCtx.createGain();
+    src.connect(g).connect(audioCtx.destination);
+    r = { stream, src, ganho: g };
+    reforcos.set(chave, r);
+  }
+  r.ganho.gain.value = ganho;
+  return true;
+}
+
 function atualizarAudios() {
   const box = $('#audios');
   const vistos = new Set();
+  // a saída escolhida vale também pro áudio reforçado (WebAudio)
+  if (audioCtx?.setSinkId && (audioCtx.sinkId || '') !== (dispositivos.saida || '')) {
+    audioCtx.setSinkId(dispositivos.saida || '').catch(() => {});
+  }
   for (const [id, peer] of peers) {
     const u = estado.usuarios.find((x) => x.id === id);
-    const stream = u?.mic && peer.streams.get(u.mic);
-    if (!stream) continue;
-    vistos.add(id);
-    let audio = [...box.children].find((a) => a.dataset.peer === id);
-    if (!audio) {
-      audio = el('audio');
-      audio.autoplay = true;
-      audio.dataset.peer = id;
-      box.append(audio);
+    if (!u) continue;
+    const fontes = [['mic', u.mic && peer.streams.get(u.mic)], ['tela', u.tela && peer.streams.get(u.tela)]];
+    for (const [tipo, stream] of fontes) {
+      if (!stream?.getAudioTracks().length) continue;
+      const chave = `${id}:${tipo}`;
+      vistos.add(chave);
+      let audio = [...box.children].find((a) => a.dataset.chave === chave);
+      if (!audio) {
+        audio = el('audio');
+        audio.autoplay = true;
+        audio.dataset.chave = chave;
+        audio.dataset.peer = id;
+        box.append(audio);
+      }
+      if (audio.srcObject !== stream) {
+        audio.srcObject = stream;
+        audio.play().catch(() => {});
+        if (tipo === 'mic') monitorarFala(id, stream);
+      }
+      aplicarSaida(audio);
+      const silenciado = estado.surdo || (tipo === 'mic' && ajustes[u.nome]?.mudo);
+      const volume = silenciado ? 0 : volumeDe(u.nome, tipo);
+      // acima de 100% o <audio> não alcança: toca pelo GainNode e o <audio> fica mudo
+      // (mas continua tocando — o Chrome só entrega o áudio do WebRTC se houver um elemento)
+      const reforcado = ajustarReforco(chave, stream, volume);
+      audio.muted = silenciado || reforcado;
+      audio.volume = Math.min(1, volume);
     }
-    if (audio.srcObject !== stream) {
-      audio.srcObject = stream;
-      audio.play().catch(() => {});
-      monitorarFala(id, stream);
-    }
-    aplicarSaida(audio);
-    audio.muted = estado.surdo;
-    audio.volume = volumeDe(u.nome, 'mic');
   }
   for (const audio of [...box.children]) {
-    if (!vistos.has(audio.dataset.peer)) {
-      audio.remove();
-      pararMonitor(audio.dataset.peer);
-    }
+    if (vistos.has(audio.dataset.chave)) continue;
+    audio.remove();
+    ajustarReforco(audio.dataset.chave, null, 0);
+    if (audio.dataset.chave.endsWith(':mic')) pararMonitor(audio.dataset.peer);
   }
+}
+
+// ---------- menu de cada pessoa na chamada (clique direito) ----------
+function abrirMenuPessoa(id, evento) {
+  evento.preventDefault();
+  evento.stopPropagation();
+  const u = estado.usuarios.find((x) => x.id === id);
+  if (!u) return;
+  if (id === estado.eu.id || !estado.voz || u.voz !== estado.voz) return abrirPerfil(u.nome, evento);
+  const a = ajustes[u.nome] ?? {};
+  const menu = $('#menu-pessoa');
+  menu.dataset.pessoa = id;
+
+  const titulo = el('div', 'menu-titulo');
+  titulo.append(avatar(u), el('span', null, u.nome));
+
+  const slider = (rotulo, tipo) => {
+    const caixa = el('label', 'menu-slider');
+    const valor = el('span', 'menu-valor');
+    const r = el('input');
+    r.type = 'range';
+    r.min = 0;
+    r.max = 2;
+    r.step = 0.05;
+    r.value = volumeDe(u.nome, tipo);
+    const mostrar = () => (valor.textContent = `${Math.round(r.value * 100)}%`);
+    mostrar();
+    r.oninput = () => {
+      mostrar();
+      mudarVolume(u.nome, tipo, Number(r.value));
+    };
+    const linha = el('div', 'menu-linha');
+    linha.append(el('span', null, rotulo), valor);
+    caixa.append(linha, r);
+    return caixa;
+  };
+  const opcao = (rotulo, chave, dica) => {
+    const caixa = el('label', 'menu-opcao');
+    const c = el('input');
+    c.type = 'checkbox';
+    c.checked = !!a[chave];
+    c.onchange = () => {
+      mudarAjuste(u.nome, chave, c.checked);
+      if (chave === 'mudo') renderCanais();
+    };
+    const texto = el('span', null, rotulo);
+    if (dica) texto.append(el('small', null, dica));
+    caixa.append(texto, c);
+    return caixa;
+  };
+
+  const itens = [titulo, slider('Volume do usuário', 'mic'), opcao('Silenciar pra mim', 'mudo')];
+  if (u.tela) itens.push(el('hr'), slider('Volume da transmissão', 'tela'), opcao('Ocultar transmissão', 'ocultarTela', 'Para de receber o vídeo da tela'));
+  itens.push(el('hr'), opcao('Ocultar câmera', 'ocultarCam'), opcao('Qualidade baixa', 'baixa', 'Economiza internet: recebe o vídeo em resolução menor'));
+  const perfil = el('button', 'menu-botao', 'Ver perfil');
+  perfil.onclick = (e) => abrirPerfil(u.nome, e);
+  itens.push(el('hr'), perfil);
+  menu.replaceChildren(...itens);
+  fecharPopovers();
+  menu.hidden = false;
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(evento.clientX, innerWidth - width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(evento.clientY, innerHeight - height - 8))}px`;
+}
+
+// ---------- prévia da transmissão ao passar o mouse ----------
+let previaTimer = null;
+function mostrarPrevia(u, alvo) {
+  clearTimeout(previaTimer);
+  previaTimer = setTimeout(() => {
+    const caixa = $('#previa-tela');
+    const r = alvo.getBoundingClientRect();
+    const rotulo = el('div', 'previa-rotulo');
+    rotulo.append(el('span', 'badge-vivo', 'AO VIVO'), u.nome);
+    const aoVivo = estado.voz && u.voz === estado.voz ? peers.get(u.id)?.streams.get(u.tela) : null;
+    let midia;
+    if (temVideo(aoVivo) && !ajustes[u.nome]?.ocultarTela) {
+      midia = el('video');
+      midia.muted = true;
+      midia.autoplay = true;
+      midia.playsInline = true;
+      midia.srcObject = aoVivo;
+    } else {
+      midia = el('div', 'previa-vazia', 'Carregando prévia…');
+      socket.emit('tela:ver-previa', u.id, (res) => {
+        if (caixa.hidden || caixa.dataset.pessoa !== u.id) return;
+        if (res?.img) {
+          const img = el('img');
+          img.src = res.img;
+          midia.replaceWith(img);
+        } else {
+          midia.textContent = 'Sem prévia ainda';
+        }
+      });
+    }
+    const dica = el('div', 'previa-dica', u.voz === estado.voz ? 'Clique pra assistir' : `Entre em ${u.voz} pra assistir`);
+    caixa.dataset.pessoa = u.id;
+    caixa.replaceChildren(midia, rotulo, dica);
+    caixa.hidden = false;
+    caixa.style.left = `${r.right + 12}px`;
+    caixa.style.top = `${Math.max(8, Math.min(r.top - 60, innerHeight - 230))}px`;
+  }, 250);
+}
+function esconderPrevia() {
+  clearTimeout(previaTimer);
+  const caixa = $('#previa-tela');
+  caixa.hidden = true;
+  caixa.querySelector('video')?.removeAttribute('src');
+  caixa.replaceChildren();
+}
+
+// quem transmite manda uma miniatura de tempos em tempos pro servidor
+let previaEnvio = null;
+function enviarMiniatura() {
+  const track = estado.tela?.getVideoTracks()[0];
+  if (!track || track.readyState !== 'live') return;
+  const video = el('video');
+  video.muted = true;
+  video.srcObject = new MediaStream([track]);
+  video.play().then(() => {
+    const canvas = document.createElement('canvas');
+    const escala = Math.min(1, 480 / (video.videoWidth || 480));
+    canvas.width = Math.round((video.videoWidth || 480) * escala);
+    canvas.height = Math.round((video.videoHeight || 270) * escala);
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    video.srcObject = null;
+    socket.emit('tela:previa', canvas.toDataURL('image/jpeg', 0.6));
+  }).catch(() => {});
+}
+function miniaturas(ligar) {
+  clearInterval(previaEnvio);
+  previaEnvio = null;
+  if (!ligar) return;
+  setTimeout(enviarMiniatura, 1500); // espera a imagem estabilizar
+  previaEnvio = setInterval(enviarMiniatura, 10_000);
 }
 
 // ---------- configurações ----------
 async function abrirConfig() {
   $('#modal-config').hidden = false;
+  preencherPerfil();
   const lista = (await navigator.mediaDevices?.enumerateDevices()) ?? [];
   const preencher = (sel, tipo, chave) => {
     const opcoes = [new Option('Padrão do sistema', '')];
@@ -1167,6 +1671,241 @@ async function abrirConfig() {
   $('#cfg-fps').value = String(fpsTela());
 
 }
+
+// ---------- perfil (foto, cor, sobre mim) ----------
+let corAutomatica = true;
+
+// Converte qualquer cor CSS (hsl, nome…) pra #rrggbb, que é o que o <input type=color> aceita
+function corHex(cor) {
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.fillStyle = cor;
+  return ctx.fillStyle.startsWith('#') ? ctx.fillStyle : '#5865f2';
+}
+
+function preencherPerfil() {
+  const p = perfilPorConta(estado.eu?.conta);
+  if (!p) return;
+  $('#cfg-avatar').replaceChildren(avatar(p));
+  $('#btn-remover-foto').hidden = !p.avatar;
+  corAutomatica = !p.cor.startsWith('#');
+  $('#cfg-cor').value = corHex(p.cor);
+  $('#btn-cor-padrao').hidden = corAutomatica;
+  $('#cfg-bio').value = p.bio ?? '';
+}
+
+async function enviarImagemPara(evento, arquivo, aoTerminar) {
+  if (!arquivo?.type.startsWith('image/')) return;
+  if (arquivo.size > 10 * 1024 * 1024) return avisar('Imagem grande demais (máx. 10 MB).');
+  avisar('Enviando imagem…', 60000);
+  socket.timeout(60000).emit(evento, await arquivo.arrayBuffer(), (err, res) => {
+    if (err) return avisar('Não deu pra enviar a imagem (conexão lenta?).');
+    if (res?.erro) return avisar(res.erro);
+    $('#toast').hidden = true;
+    aoTerminar?.();
+  });
+}
+
+$('#btn-trocar-foto').onclick = () => $('#input-foto').click();
+$('#input-foto').onchange = (e) => {
+  enviarImagemPara('perfil:avatar', e.target.files[0]);
+  e.target.value = '';
+};
+$('#btn-remover-foto').onclick = () => socket.emit('perfil:avatar', null, (res) => res?.erro && avisar(res.erro));
+$('#cfg-cor').oninput = () => {
+  corAutomatica = false;
+  $('#btn-cor-padrao').hidden = false;
+};
+$('#btn-cor-padrao').onclick = () => {
+  corAutomatica = true;
+  $('#btn-cor-padrao').hidden = true;
+};
+$('#btn-salvar-perfil').onclick = () => {
+  const botao = $('#btn-salvar-perfil');
+  botao.disabled = true;
+  socket.emit('perfil:editar', { cor: corAutomatica ? null : $('#cfg-cor').value, bio: $('#cfg-bio').value }, (res) => {
+    botao.disabled = false;
+    if (res?.erro) return avisar(res.erro);
+    botao.textContent = 'Salvo!';
+    setTimeout(() => (botao.textContent = 'Salvar perfil'), 1500);
+  });
+};
+
+// quando os perfis chegam do servidor, a foto/cor do modal acompanham
+socket.on('perfis', () => { if (!$('#modal-config').hidden) $('#cfg-avatar').replaceChildren(avatar(perfilPorConta(estado.eu.conta))); });
+
+// ---------- cartão de perfil (clicar no nome/foto de alguém) ----------
+function abrirPerfil(nome, evento) {
+  evento?.stopPropagation();
+  const p = perfilDe(nome);
+  const online = estado.usuarios.find((u) => u.nome === nome);
+  if (!p && !online) return;
+  const pessoa = { nome, cor: p?.cor ?? online.cor, id: online?.id };
+  const cartao = $('#cartao-perfil');
+
+  const banner = el('div', 'perfil-banner');
+  banner.style.background = pessoa.cor;
+  const foto = avatar(pessoa, { status: !!online });
+  foto.classList.add('grande');
+  if (!online) foto.classList.add('sem-status');
+
+  const corpo = el('div', 'perfil-corpo');
+  const titulo = el('h3', null, nome);
+  if (p?.admin) titulo.append(icone('coroa', 'coroa'));
+  corpo.append(titulo);
+  const status = online ? (online.voz ? `Em ${online.voz}${online.tela ? ' · ao vivo' : ''}` : 'Online') : 'Offline';
+  corpo.append(el('p', 'perfil-status', status));
+  if (p?.bio) {
+    corpo.append(el('h4', null, 'Sobre mim'), el('p', 'perfil-bio', p.bio));
+  }
+
+  const acoes = el('div', 'perfil-acoes');
+  if (p && p.id === estado.eu?.conta) {
+    const b = el('button', 'btn-secundario', 'Editar perfil');
+    b.onclick = () => { fecharPopovers(); abrirConfig(); };
+    acoes.append(b);
+  } else if (p && souAdmin()) {
+    const b = el('button', 'btn-secundario', p.admin ? 'Remover admin' : 'Tornar admin');
+    b.onclick = () => socket.emit('admin:definir', { conta: p.id, admin: !p.admin }, (res) => {
+      if (res?.erro) return avisar(res.erro);
+      fecharPopovers();
+    });
+    acoes.append(b);
+  }
+  if (acoes.childElementCount) corpo.append(acoes);
+
+  cartao.replaceChildren(banner, foto, corpo);
+  cartao.hidden = false;
+  // abre perto do clique, sem sair da tela
+  const x = evento?.clientX ?? innerWidth / 2;
+  const y = evento?.clientY ?? innerHeight / 3;
+  const { width, height } = cartao.getBoundingClientRect();
+  cartao.style.left = `${Math.max(8, Math.min(x + 8, innerWidth - width - 8))}px`;
+  cartao.style.top = `${Math.max(8, Math.min(y - 40, innerHeight - height - 8))}px`;
+}
+
+function fecharPopovers() {
+  $$('.popover').forEach((e) => (e.hidden = true));
+}
+document.addEventListener('click', (e) => {
+  for (const pop of $$('.popover')) {
+    if (!pop.hidden && !pop.contains(e.target)) pop.hidden = true;
+  }
+});
+
+// ---------- configurações do servidor (admin) ----------
+let servidorPendente = false;
+
+function abrirModalServidor(focoTipo) {
+  $('#modal-servidor').hidden = false;
+  renderModalServidor(true);
+  if (focoTipo) $(`.srv-novo[data-tipo="${focoTipo}"] input`).focus();
+}
+
+function linhaCanal(c, lista) {
+  const li = el('li', 'srv-canal');
+  li.append(icone(c.tipo === 'texto' ? 'hash' : 'voz'));
+  const nome = el('input');
+  nome.value = c.nome;
+  nome.maxLength = 32;
+  nome.title = 'Nome do canal';
+  nome.onchange = () => editarCanal(c.id, { nome: nome.value });
+  li.append(nome);
+  if (c.tipo === 'texto') {
+    const topico = el('input', 'srv-topico');
+    topico.value = c.topico;
+    topico.maxLength = 120;
+    topico.placeholder = 'Tópico (opcional)';
+    topico.onchange = () => editarCanal(c.id, { topico: topico.value });
+    li.append(topico);
+  }
+  const botao = (ic, titulo, acao, desligado) => {
+    const b = el('button', 'btn-icone');
+    b.type = 'button';
+    b.title = titulo;
+    b.disabled = !!desligado;
+    b.append(icone(ic));
+    b.onclick = acao;
+    li.append(b);
+  };
+  const i = lista.indexOf(c);
+  botao('cima', 'Subir', () => moverCanal(c.id, -1), i === 0);
+  botao('seta', 'Descer', () => moverCanal(c.id, 1), i === lista.length - 1);
+  botao('lixo', 'Apagar canal', () => {
+    const aviso = c.tipo === 'texto'
+      ? `Apagar #${c.nome} e TODAS as mensagens dele? Não dá pra desfazer.`
+      : `Apagar a sala "${c.nome}"? Quem estiver nela sai da chamada.`;
+    if (confirm(aviso)) socket.emit('canal:apagar', c.id, (res) => res?.erro && avisar(res.erro));
+  }, lista.length <= 1);
+  return li;
+}
+
+const respostaServidor = (res) => {
+  if (res?.erro) {
+    avisar(res.erro);
+    renderModalServidor(true);
+  }
+};
+const editarCanal = (id, dados) => socket.emit('canal:editar', { id, ...dados }, respostaServidor);
+const moverCanal = (id, direcao) => socket.emit('canal:mover', { id, direcao }, respostaServidor);
+
+function renderModalServidor(forcar = false) {
+  const modal = $('#modal-servidor');
+  // não atrapalha quem está digitando num campo: atualiza quando sair dele
+  if (!forcar && modal.contains(document.activeElement) && document.activeElement.matches('input:not([type=checkbox])')) {
+    servidorPendente = true;
+    return;
+  }
+  servidorPendente = false;
+  const srv = estado.servidor;
+  if (forcar || document.activeElement !== $('#srv-nome')) $('#srv-nome').value = srv.nome;
+  pintarIconeServidor($('#srv-icone'));
+  $('#btn-remover-icone').hidden = !srv.icone;
+  for (const tipo of ['texto', 'voz']) {
+    const lista = srv.canais.filter((c) => c.tipo === tipo);
+    $(`#srv-canais-${tipo}`).replaceChildren(...lista.map((c) => linhaCanal(c, lista)));
+  }
+  $('#srv-admins').replaceChildren(...estado.perfis.map((p) => {
+    const li = el('li');
+    const marcar = el('input');
+    marcar.type = 'checkbox';
+    marcar.checked = p.admin;
+    marcar.onchange = () => socket.emit('admin:definir', { conta: p.id, admin: marcar.checked }, respostaServidor);
+    const rotulo = el('label');
+    rotulo.append(marcar, avatar(p), el('span', null, p.nome + (p.id === estado.eu.conta ? ' (você)' : '')));
+    li.append(rotulo);
+    return li;
+  }));
+}
+
+$('#modal-servidor').addEventListener('focusout', () => setTimeout(() => servidorPendente && renderModalServidor(), 0));
+$('#btn-cfg-servidor').onclick = () => abrirModalServidor();
+$$('.btn-add-canal').forEach((b) => (b.onclick = (e) => {
+  e.stopPropagation(); // não recolhe a categoria
+  abrirModalServidor(b.dataset.tipo);
+}));
+$('#btn-fechar-servidor').onclick = () => ($('#modal-servidor').hidden = true);
+$('#modal-servidor').onclick = (e) => { if (e.target.id === 'modal-servidor') e.target.hidden = true; };
+$('#btn-salvar-srv-nome').onclick = () => socket.emit('servidor:editar', { nome: $('#srv-nome').value }, (res) => {
+  if (res?.erro) return avisar(res.erro);
+  avisar('Nome do servidor salvo', 2000);
+});
+$('#srv-nome').onkeydown = (e) => { if (e.key === 'Enter') $('#btn-salvar-srv-nome').click(); };
+$('#btn-trocar-icone').onclick = () => $('#input-icone').click();
+$('#input-icone').onchange = (e) => {
+  enviarImagemPara('servidor:icone', e.target.files[0]);
+  e.target.value = '';
+};
+$('#btn-remover-icone').onclick = () => socket.emit('servidor:icone', null, respostaServidor);
+$$('.srv-novo').forEach((form) => form.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = form.querySelector('input');
+  socket.emit('canal:criar', { tipo: form.dataset.tipo, nome: input.value }, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    input.value = '';
+    renderModalServidor(true);
+    input.focus();
+  });
+}));
 
 function salvarNome() {
   const novo = $('#cfg-nome').value.trim();
@@ -1219,7 +1958,8 @@ $('#cfg-mic').onchange = async (e) => {
 };
 $('#cfg-saida').onchange = (e) => {
   salvarDispositivo('saida', e.target.value);
-  $$('#audios audio, .tile.tela video').forEach((m) => m.setSinkId?.(e.target.value).catch(() => {}));
+  $$('#audios audio').forEach((m) => m.setSinkId?.(e.target.value).catch(() => {}));
+  atualizarAudios();
 };
 async function mudarTransmissao(chave, valor) {
   transmissao[chave] = valor;
@@ -1251,5 +1991,7 @@ $('#btn-config').onclick = abrirConfig;
 $('#btn-fechar-config').onclick = () => ($('#modal-config').hidden = true);
 $('#modal-config').onclick = (e) => { if (e.target.id === 'modal-config') e.target.hidden = true; };
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') $$('.modal').forEach((m) => (m.hidden = true));
+  if (e.key !== 'Escape') return;
+  $$('.modal').forEach((m) => (m.hidden = true));
+  fecharPopovers();
 });

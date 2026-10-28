@@ -37,9 +37,9 @@
 
   <div id="app" hidden>
     <nav id="rail">
-      <div class="rail-item ativo" title="Amiguinhos Gamer">
+      <div class="rail-item ativo" id="rail-servidor">
         <span class="pill"></span>
-        <div class="icone-servidor">AG</div>
+        <div class="icone-servidor" id="icone-servidor"></div>
       </div>
       <div class="rail-sep"></div>
       <button class="rail-botao btn-convidar" title="Convidar amigos" data-icone="convidar"></button>
@@ -48,14 +48,15 @@
 
     <aside id="sidebar">
       <header class="servidor-cab">
-        <span>Amiguinhos Gamer</span>
+        <span id="servidor-nome"></span>
+        <button class="btn-icone" id="btn-cfg-servidor" title="Configurações do servidor" data-icone="config" hidden></button>
         <button class="btn-icone btn-convidar" title="Convidar amigos" data-icone="convidar"></button>
       </header>
 
       <div class="lista-canais">
-        <div class="categoria" data-lista="canais-texto"><span data-icone="seta"></span>Canais de texto</div>
+        <div class="categoria" data-lista="canais-texto"><span data-icone="seta"></span><span class="titulo-cat">Canais de texto</span><button class="btn-add-canal so-admin" data-tipo="texto" title="Criar canal de texto" hidden>+</button></div>
         <ul id="canais-texto"></ul>
-        <div class="categoria" data-lista="canais-voz"><span data-icone="seta"></span>Canais de voz</div>
+        <div class="categoria" data-lista="canais-voz"><span data-icone="seta"></span><span class="titulo-cat">Canais de voz</span><button class="btn-add-canal so-admin" data-tipo="voz" title="Criar canal de voz" hidden>+</button></div>
         <ul id="canais-voz"></ul>
       </div>
 
@@ -94,7 +95,12 @@
         <span id="titulo-canal"></span>
         <span id="topico"></span>
         <div class="topo-acoes">
+          <button id="btn-fixadas" class="btn-icone" title="Mensagens fixadas" data-icone="pino"></button>
           <button id="btn-membros" class="btn-icone ativo" title="Lista de membros" data-icone="membros"></button>
+        </div>
+        <div id="painel-fixadas" class="popover" hidden>
+          <h3>Mensagens fixadas</h3>
+          <div id="lista-fixadas"></div>
         </div>
       </header>
 
@@ -124,6 +130,8 @@
         <aside id="membros">
           <h3 id="titulo-online">Online</h3>
           <ul id="online"></ul>
+          <h3 id="titulo-offline" hidden>Offline</h3>
+          <ul id="offline"></ul>
         </aside>
       </div>
     </main>
@@ -142,6 +150,26 @@
         </div>
       </label>
       <p class="dica-cfg" id="cfg-usuario"></p>
+      <div class="cfg-perfil">
+        <div class="cfg-foto">
+          <span id="cfg-avatar"></span>
+          <div class="cfg-foto-botoes">
+            <button type="button" class="btn-secundario" id="btn-trocar-foto">Trocar foto</button>
+            <button type="button" class="btn-link" id="btn-remover-foto">Remover</button>
+            <input type="file" id="input-foto" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+          </div>
+        </div>
+        <label>Cor do nome
+          <div class="linha-cor">
+            <input type="color" id="cfg-cor">
+            <button type="button" class="btn-link" id="btn-cor-padrao">Usar cor automática</button>
+          </div>
+        </label>
+        <label>Sobre mim
+          <textarea id="cfg-bio" maxlength="190" rows="3" placeholder="Conta um pouco sobre você (jogos, horários…)"></textarea>
+        </label>
+        <button type="button" class="btn-primario" id="btn-salvar-perfil">Salvar perfil</button>
+      </div>
       <label>Dispositivo de entrada (microfone)<select id="cfg-mic"></select></label>
       <label>Dispositivo de saída<select id="cfg-saida"></select></label>
       <label>Câmera<select id="cfg-cam"></select></label>
@@ -164,6 +192,54 @@
       <button type="button" class="btn-link" id="btn-sair-conta">Sair da conta</button>
     </div>
   </div>
+
+  <div id="modal-servidor" class="modal" hidden>
+    <div class="modal-caixa modal-larga">
+      <header>
+        <h2>Configurações do servidor</h2>
+        <button class="btn-icone" id="btn-fechar-servidor" title="Fechar" data-icone="fechar"></button>
+      </header>
+      <div class="srv-topo">
+        <div class="srv-icone">
+          <div class="icone-servidor grande" id="srv-icone"></div>
+          <button type="button" class="btn-link" id="btn-trocar-icone">Trocar ícone</button>
+          <button type="button" class="btn-link" id="btn-remover-icone">Remover</button>
+          <input type="file" id="input-icone" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        </div>
+        <label>Nome do servidor
+          <div class="linha-copiar">
+            <input id="srv-nome" maxlength="40">
+            <button type="button" class="btn-primario" id="btn-salvar-srv-nome">Salvar</button>
+          </div>
+        </label>
+      </div>
+      <section>
+        <h3>Canais de texto</h3>
+        <ul class="srv-canais" id="srv-canais-texto"></ul>
+        <form class="linha-copiar srv-novo" data-tipo="texto">
+          <input placeholder="nome-do-canal" maxlength="32" required>
+          <button class="btn-primario">Criar</button>
+        </form>
+      </section>
+      <section>
+        <h3>Canais de voz</h3>
+        <ul class="srv-canais" id="srv-canais-voz"></ul>
+        <form class="linha-copiar srv-novo" data-tipo="voz">
+          <input placeholder="Nome da sala" maxlength="32" required>
+          <button class="btn-primario">Criar</button>
+        </form>
+      </section>
+      <section>
+        <h3>Admins</h3>
+        <p class="dica-cfg">Admins criam e editam canais, fixam e apagam mensagens e mudam o servidor.</p>
+        <ul class="srv-admins" id="srv-admins"></ul>
+      </section>
+    </div>
+  </div>
+
+  <div id="cartao-perfil" class="popover" hidden></div>
+  <div id="menu-pessoa" class="popover" hidden></div>
+  <div id="previa-tela" hidden></div>
 
   <div id="modal-convite" class="modal" hidden>
     <div class="modal-caixa">
