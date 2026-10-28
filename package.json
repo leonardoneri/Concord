@@ -37,7 +37,7 @@
       "output": "dist"
     },
     "win": {
-      "icon": "electron/icone.png",
+      "icon": "build/icon.ico",
       "target": [
         "nsis"
       ]
