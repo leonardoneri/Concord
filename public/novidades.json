@@ -1,5 +1,19 @@
 [
   {
+    "versao": "1.0.13",
+    "itens": [
+      "Assistir junto: botão na chamada pra ver um vídeo do YouTube sincronizado com a galera (play, pausa e pulo valem pra todo mundo)",
+      "Indicador de conexão na chamada: ping e perda de pacote seus e de cada um, com aviso quando a sua internet fica ruim",
+      "Enquetes no chat: botão ao lado do anexo, até 10 opções, uma resposta ou várias, com votos ao vivo",
+      "Eventos: marque um jogo com data e hora em \"Eventos\" na barra lateral; quem confirmar recebe lembrete 10 minutos antes e na hora",
+      "GIFs no chat (botão GIF) e botão de emoji na caixa de mensagem",
+      "Emojis do servidor: admins sobem nas configurações do servidor e todo mundo usa com :nome: no chat e nas reações",
+      "Cargos com nome e cor: o nome aparece na cor do cargo e a lista de membros fica agrupada. Admin dá cargo clicando no perfil da pessoa",
+      "Canais e salas privados: o cadeado nas configurações deixa um canal só pra admins e os cargos escolhidos",
+      "Clipes (app desktop): ligue em Configurações → Atalhos e aperte Ctrl+Alt+C na chamada pra mandar os últimos ~30 s da tela e do som pro chat"
+    ]
+  },
+  {
     "versao": "1.0.12",
     "itens": [
       "Soundboard na chamada: botão 🎵 com 6 sons prontos e sons que vocês mesmos sobem pro servidor (até 7 segundos)",
