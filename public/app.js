@@ -40,6 +40,7 @@ const ICONES = {
   enquete: '<path d="M3 3v18h18"/><path d="M7 16v-4M12 16V8M17 16v-7"/>',
   tv: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/>',
   sons: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  dado: '<rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="8.5" cy="15.5" r="1"/>',
   volume: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>',
   lixo: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
   membros: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
@@ -1455,6 +1456,7 @@ const nomeDoArquivo = (texto) => {
 function resumoMensagem(texto) {
   if (UPLOAD_RE.test(texto)) return '📷 Imagem';
   if (ARQUIVO_RE.test(texto)) return `📎 ${nomeDoArquivo(texto)}`;
+  texto = texto.replace(/\|\|[\s\S]+?\|\|/g, '▒▒▒▒');
   return texto.length > 120 ? `${texto.slice(0, 120)}…` : texto;
 }
 
@@ -1599,19 +1601,124 @@ function formatarTexto(texto) {
     linha.append(previewArquivo(texto));
     return linha;
   }
-  let i = 0;
-  for (const m of texto.matchAll(URL_RE)) {
-    linha.append(...comMencoes(texto.slice(i, m.index)));
-    const a = el('a', null, m[0]);
-    a.href = m[0];
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    linha.append(a);
-    if (IMG_RE.test(m[0])) linha.append(imagemPreview(m[0]));
-    i = m.index + m[0].length;
-  }
-  linha.append(...comMencoes(texto.slice(i)));
+  linha.append(...textoRico(texto));
   return linha;
+}
+
+// ---------- formatação: **negrito**, *itálico*, __sublinhado__, ~~riscado~~, `código`, ```bloco```, ||spoiler|| ----------
+// grupos: 1 bloco, 2 código, 3 <link sem prévia>, 4 link, 5 spoiler, 6 negrito, 7 sublinhado, 8 riscado, 9-10 itálico
+const FORMATO_RE = /```(?:[\w+#-]{1,15}\n)?([\s\S]+?)```|`([^`\n]+)`|<(https?:\/\/[^\s<>]+)>|(https?:\/\/[^\s<]+)|\|\|([\s\S]+?)\|\||\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|~~([\s\S]+?)~~|\*([^*\s](?:[^*\n]*[^*\s])?)\*|(?<![\p{L}\p{N}_])_([^_\s](?:[^_\n]*[^_\s])?)_(?![\p{L}\p{N}_])/gu;
+const MARCAS = { 6: 'strong', 7: 'u', 8: 's', 9: 'em', 10: 'em' };
+function linkNoTexto(url, { semPrevia, spoiler }) {
+  const a = el('a', 'link-msg', url);
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  if (semPrevia || spoiler) a.dataset.semPrevia = '';
+  else a.dataset.url = url;
+  // imagem dentro de spoiler só aparece se a pessoa abrir o link
+  return IMG_RE.test(url) && !spoiler ? [a, imagemPreview(url)] : [a];
+}
+function textoRico(texto, ctx = {}) {
+  const nos = [];
+  let i = 0;
+  for (const m of texto.matchAll(FORMATO_RE)) {
+    nos.push(...comMencoes(texto.slice(i, m.index)));
+    i = m.index + m[0].length;
+    if (m[1] != null) {
+      const pre = el('pre', 'bloco-codigo');
+      pre.append(el('code', null, m[1].replace(/^\n|\n$/g, '')));
+      nos.push(pre);
+      if (texto[i] === '\n') i++; // o bloco já quebra a linha
+    } else if (m[2] != null) {
+      nos.push(el('code', 'codigo', m[2]));
+    } else if (m[3] != null || m[4] != null) {
+      nos.push(...linkNoTexto(m[3] ?? m[4], { ...ctx, semPrevia: m[3] != null }));
+    } else if (m[5] != null) {
+      const s = el('span', 'spoiler');
+      s.title = 'Spoiler: clique pra ver';
+      s.append(...textoRico(m[5], { ...ctx, spoiler: true }));
+      s.onclick = (e) => {
+        if (s.classList.contains('revelado')) return;
+        e.preventDefault();
+        s.classList.add('revelado');
+        s.title = '';
+      };
+      nos.push(s);
+    } else {
+      const g = Object.keys(MARCAS).find((k) => m[k] != null);
+      const marca = el(MARCAS[g]);
+      marca.append(...textoRico(m[g], ctx));
+      nos.push(marca);
+    }
+  }
+  nos.push(...comMencoes(texto.slice(i)));
+  return nos;
+}
+
+// ---------- prévia de links (o servidor lê título/imagem da página) ----------
+const previas = new Map(); // url -> prévia (null = sem prévia) | Promise
+function pedirPrevia(url) {
+  if (!previas.has(url)) {
+    previas.set(url, new Promise((pronto) => {
+      socket.timeout(15000).emit('link:previa', url, (err, p) => {
+        if (err) previas.delete(url); // conexão caiu: tenta de novo depois
+        else previas.set(url, p ?? null);
+        pronto(err ? null : p ?? null);
+      });
+    }));
+  }
+  return previas.get(url);
+}
+function cartaoPrevia(url) {
+  const caixa = el('div', 'previa-link');
+  const preencher = (p) => {
+    if (!p) return false;
+    if (p.cor) caixa.style.borderLeftColor = p.cor;
+    const textos = el('div', 'previa-textos');
+    textos.append(el('div', 'previa-site', p.site));
+    const titulo = el('a', 'previa-titulo', p.titulo);
+    titulo.href = url;
+    titulo.target = '_blank';
+    titulo.rel = 'noopener noreferrer';
+    textos.append(titulo);
+    if (p.descricao) textos.append(el('div', 'previa-descricao', p.descricao));
+    caixa.append(textos);
+    if (p.imagem) {
+      const img = el('img', p.grande ? 'previa-img grande' : 'previa-img');
+      img.src = p.imagem;
+      img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      img.onerror = () => img.remove();
+      img.onclick = () => window.open(url, '_blank', 'noopener');
+      caixa.classList.toggle('com-grande', !!p.grande);
+      caixa.append(img);
+    }
+    if (p.youtube && estado.voz) {
+      const b = el('button', 'btn-secundario previa-assistir', estado.assistir ? 'Pôr na fila da chamada' : 'Assistir junto na chamada');
+      b.type = 'button';
+      b.onclick = () => socket.emit('assistir:adicionar', { videos: [p.youtube], agora: !estado.assistir }, (r) => {
+        if (r?.erro) return avisar(r.erro);
+        avisar(estado.assistir ? 'Vídeo na fila da chamada.' : 'Vídeo rolando na chamada.', 3000);
+      });
+      caixa.append(b);
+    }
+    return true;
+  };
+  const p = previas.get(url);
+  if (p instanceof Promise || p === undefined) {
+    caixa.hidden = true;
+    pedirPrevia(url).then((r) => {
+      if (!caixa.isConnected) return;
+      const box = $('#mensagens');
+      const noFim = pertoDoFim(box);
+      if (preencher(r)) caixa.hidden = false;
+      if (noFim) rolarProFim();
+    });
+  } else if (!preencher(p)) {
+    caixa.hidden = true;
+  }
+  return caixa;
 }
 
 const fmtHora = (d) => d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -1749,6 +1856,9 @@ function corpoMensagem(m) {
     tag.title = new Date(m.editado_em).toLocaleString('pt-BR');
     corpo.append(tag);
   }
+  // até 2 cartões por mensagem (link de imagem já aparece como imagem)
+  const links = [...new Set([...corpo.querySelectorAll('a[data-url]')].map((a) => a.dataset.url))].filter((u) => !IMG_RE.test(u));
+  corpo.append(...links.slice(0, 2).map(cartaoPrevia));
   return corpo;
 }
 
@@ -3598,6 +3708,56 @@ function abrirSons(e) {
   painel.style.top = `${Math.max(8, r.top - painel.getBoundingClientRect().height - 10)}px`;
 }
 $('#btn-sons').onclick = abrirSons;
+
+// ---------- sortear times (o servidor sorteia e manda no chat) ----------
+function pessoasNaChamada() {
+  return [...new Map(estado.usuarios.filter((u) => u.voz === estado.voz).map((u) => [u.conta, u])).values()];
+}
+function canalDoResultado() {
+  return estado.servidor?.id === estado.vozInfo?.servidorId ? canalPorId(estado.canalTexto) : null;
+}
+function abrirTimes(e) {
+  e?.stopPropagation();
+  const painel = $('#painel-times');
+  if (!painel.hidden) return fecharPopovers();
+  fecharPopovers();
+  const n = pessoasNaChamada().length;
+  const canal = canalDoResultado();
+  $('#times-info').textContent = canal
+    ? `${n} ${n === 1 ? 'pessoa' : 'pessoas'} na chamada. O resultado vai pro #${canal.nome}.`
+    : 'Abre um canal de texto do servidor da chamada pra mandar o resultado.';
+  for (const b of $$('#painel-times [data-times]')) b.disabled = !canal || n < Number(b.dataset.times);
+  painel.hidden = false;
+  const r = $('#btn-times').getBoundingClientRect();
+  const largura = painel.getBoundingClientRect().width;
+  painel.style.left = `${Math.max(8, Math.min(innerWidth - largura - 8, r.left + r.width / 2 - largura / 2))}px`;
+  painel.style.top = `${Math.max(8, r.top - painel.getBoundingClientRect().height - 10)}px`;
+}
+$('#btn-times').onclick = abrirTimes;
+for (const b of $$('#painel-times [data-times]')) {
+  b.onclick = () => socket.emit('times:sortear', { canal: canalDoResultado()?.id, times: Number(b.dataset.times) }, (r) => {
+    if (r?.erro) return avisar(r.erro);
+    fecharPopovers();
+  });
+}
+// todo mundo da chamada vê o resultado na tela, mesmo sem estar olhando o chat
+let timerTimes;
+socket.on('times', ({ por, grupos }) => {
+  const c = $('#cartao-times');
+  const lista = el('div', 'lista-times');
+  lista.append(...grupos.map((g, i) => {
+    const t = el('div', 'time');
+    t.append(el('b', null, `Time ${i + 1}`), ...g.map((nome) => el('span', null, nome)));
+    return t;
+  }));
+  $('#times-por').textContent = `🎲 ${por} sorteou os times`;
+  $('#times-lista').replaceWith(lista);
+  lista.id = 'times-lista';
+  c.hidden = false;
+  clearTimeout(timerTimes);
+  timerTimes = setTimeout(() => (c.hidden = true), 20000);
+});
+$('#fechar-times').onclick = () => ($('#cartao-times').hidden = true);
 $('#vol-sons').oninput = (e) => {
   volumeSons = Number(e.target.value);
   salvarStorage('volumeSons', volumeSons);

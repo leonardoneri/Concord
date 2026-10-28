@@ -167,6 +167,7 @@
             <button class="btn-redondo" id="btn-tira" title="Esconder participantes" data-icone="membros" hidden></button>
             <button class="btn-redondo" id="btn-assistir" title="Assistir junto: um vídeo do YouTube sincronizado pra todo mundo da chamada" data-icone="tv"></button>
             <button class="btn-redondo" id="btn-sons" title="Soundboard: tocar um som pra todo mundo da chamada" data-icone="sons"></button>
+            <button class="btn-redondo" id="btn-times" title="Sortear times com quem está na chamada" data-icone="dado"></button>
             <button class="btn-redondo perigo btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
           </div>
         </section>
@@ -421,6 +422,19 @@
     <input id="busca-gif" placeholder="Buscar GIF (ex.: risada, gg, triste…)" autocomplete="off">
     <div id="grade-gif"></div>
     <div class="fonte-gif" id="fonte-gif"></div>
+  </div>
+  <div id="painel-times" class="popover" hidden>
+    <h3>Sortear times</h3>
+    <p id="times-info"></p>
+    <div class="botoes-times">
+      <button type="button" class="btn-secundario" data-times="2">2 times</button>
+      <button type="button" class="btn-secundario" data-times="3">3 times</button>
+      <button type="button" class="btn-secundario" data-times="4">4 times</button>
+    </div>
+  </div>
+  <div id="cartao-times" hidden>
+    <header><span id="times-por"></span><button type="button" class="btn-icone" id="fechar-times" title="Fechar" data-icone="fechar"></button></header>
+    <div id="times-lista"></div>
   </div>
   <div id="painel-sons" class="popover" hidden>
     <header>

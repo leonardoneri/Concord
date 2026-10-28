@@ -4,7 +4,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt, scrypt, timingSafeEqual } from 'node:crypto';
+import dns from 'node:dns';
+import net from 'node:net';
+import https from 'node:https';
+import httpComum from 'node:http';
 import { promisify } from 'node:util';
 import { Server } from 'socket.io';
 
@@ -151,6 +155,139 @@ async function tituloYoutube(id) {
   } catch {
     return null; // sem internet agora: tenta de novo numa próxima vez
   }
+}
+
+// ---------- prévia de links (título, descrição e imagem da página) ----------
+// O servidor é quem abre a página, então nunca pode ir pra rede interna (localhost, 10.x, 192.168.x…)
+const IPS_INTERNOS = new net.BlockList();
+for (const [ip, n] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]]) IPS_INTERNOS.addSubnet(ip, n, 'ipv4');
+for (const [ip, n] of [['::', 127], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) IPS_INTERNOS.addSubnet(ip, n, 'ipv6');
+function ipInterno(ip) {
+  const v4 = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip)?.[1];
+  if (v4) ip = v4;
+  return IPS_INTERNOS.check(ip, net.isIPv6(ip) ? 'ipv6' : 'ipv4');
+}
+// resolve o nome e recusa IP interno na hora de conectar (vale também pros redirecionamentos)
+function lookupSeguro(host, opcoes, cb) {
+  dns.lookup(host, { ...opcoes, all: true }, (err, ips) => {
+    if (err) return cb(err);
+    if (!ips.length || ips.some((x) => ipInterno(x.address))) return cb(new Error('endereço interno'));
+    if (opcoes?.all) cb(null, ips);
+    else cb(null, ips[0].address, ips[0].family);
+  });
+}
+const MAX_PAGINA = 768 * 1024;
+function baixarPagina(url, saltos = 4) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(url); } catch { return reject(new Error('link inválido')); }
+    if (!['http:', 'https:'].includes(u.protocol) || (u.port && !['80', '443'].includes(u.port))) return reject(new Error('link não suportado'));
+    if (net.isIP(u.hostname.replace(/^\[|\]$/g, '')) && ipInterno(u.hostname.replace(/^\[|\]$/g, ''))) return reject(new Error('endereço interno'));
+    const req = (u.protocol === 'https:' ? https : httpComum).get(u, {
+      lookup: lookupSeguro, timeout: 6000,
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; ConcordBot/1.0; prévia de links)', accept: 'text/html,application/xhtml+xml', 'accept-language': 'pt-BR,pt;q=0.9,en;q=0.5' },
+    }, (r) => {
+      if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+        r.resume();
+        if (!saltos) return reject(new Error('redirecionamentos demais'));
+        return resolve(baixarPagina(new URL(r.headers.location, u).href, saltos - 1));
+      }
+      if (r.statusCode !== 200 || !/text\/html|application\/xhtml/i.test(r.headers['content-type'] ?? '')) {
+        r.resume();
+        return reject(new Error(`resposta ${r.statusCode}`));
+      }
+      const partes = [];
+      let tamanho = 0;
+      const fim = () => {
+        const buf = Buffer.concat(partes);
+        const charset = /charset=["']?([\w-]+)/i.exec(r.headers['content-type'] ?? '')?.[1]
+          ?? /<meta[^>]+charset=["']?([\w-]+)/i.exec(buf.toString('latin1', 0, 4096))?.[1] ?? 'utf-8';
+        let html;
+        try { html = new TextDecoder(charset).decode(buf); } catch { html = buf.toString('utf8'); }
+        resolve({ html, url: u.href });
+      };
+      r.on('data', (d) => {
+        partes.push(d);
+        tamanho += d.length;
+        // as tags que interessam ficam no <head>: não precisa da página inteira
+        if (tamanho > MAX_PAGINA) { r.destroy(); fim(); }
+      });
+      r.on('end', fim);
+      r.on('error', reject);
+    });
+    req.on('timeout', () => req.destroy(new Error('demorou demais')));
+    req.on('error', reject);
+  });
+}
+const ENTIDADES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+const desescapar = (t) => t.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+  if (e[0] === '#') {
+    const n = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+    return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
+  }
+  return ENTIDADES[e.toLowerCase()] ?? m;
+});
+const textoLimpo = (t, max) => {
+  t = desescapar(String(t ?? '')).replace(/[\p{C}]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+};
+function lerMetaTags(html, base) {
+  const meta = {};
+  for (const [tag] of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const attr = {};
+    for (const m of tag.matchAll(/([a-z:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)) attr[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4];
+    const chave = (attr.property ?? attr.name ?? '').toLowerCase();
+    if (chave && attr.content != null && !(chave in meta)) meta[chave] = attr.content;
+  }
+  const titulo = meta['og:title'] ?? meta['twitter:title'] ?? /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1];
+  if (!titulo?.trim()) return null;
+  let imagem = meta['og:image:secure_url'] ?? meta['og:image'] ?? meta['twitter:image'] ?? meta['twitter:image:src'];
+  try { imagem = imagem ? new URL(desescapar(imagem.trim()), base).href : null; } catch { imagem = null; }
+  const cor = meta['theme-color'];
+  return {
+    site: textoLimpo(meta['og:site_name'] ?? new URL(base).hostname.replace(/^www\./, ''), 60),
+    titulo: textoLimpo(titulo, 200),
+    descricao: textoLimpo(meta['og:description'] ?? meta['twitter:description'] ?? meta.description ?? '', 300) || null,
+    imagem: imagem?.startsWith('https://') && imagem.length < 1000 ? imagem : null,
+    // imagem pequena (ícone, logo) vai do lado; foto/print vai grande embaixo
+    grande: (meta['twitter:card'] ?? '') === 'summary_large_image' || Number(meta['og:image:width']) >= 400,
+    cor: /^#[0-9a-f]{6}$/i.test(cor ?? '') ? cor : null,
+  };
+}
+const idYoutube = (url) => {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^(www|m|music)\./, '');
+    const id = host === 'youtu.be' ? u.pathname.slice(1, 12)
+      : host === 'youtube.com' ? (u.searchParams.get('v') ?? /^\/(?:shorts|live|embed)\/([\w-]{11})/.exec(u.pathname)?.[1]) : null;
+    return /^[\w-]{11}$/.test(id ?? '') ? id : null;
+  } catch { return null; }
+};
+async function buscarPrevia(url) {
+  const yt = idYoutube(url);
+  if (yt) {
+    // YouTube: o oEmbed é mais confiável que a página (que às vezes cai na tela de cookies)
+    const r = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(`https://www.youtube.com/watch?v=${yt}`)}`, { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return { site: 'YouTube', titulo: textoLimpo(d.title, 200), descricao: d.author_name ? textoLimpo(d.author_name, 100) : null,
+      imagem: `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`, grande: true, cor: '#ff0000', youtube: yt };
+  }
+  const { html, url: final } = await baixarPagina(url);
+  const fimHead = html.search(/<\/head>|<body/i);
+  return lerMetaTags(fimHead > 0 ? html.slice(0, fimHead) : html, final);
+}
+const cachePrevias = new Map(); // url -> { em, previa | promessa }
+function previaDoLink(url) {
+  const guardado = cachePrevias.get(url);
+  if (guardado && Date.now() - guardado.em < (guardado.previa === null ? 10 * 60e3 : 6 * 3600e3)) return guardado.promessa;
+  const promessa = buscarPrevia(url).catch(() => null);
+  const item = { em: Date.now(), promessa, previa: undefined };
+  promessa.then((previa) => (item.previa = previa));
+  cachePrevias.set(url, item);
+  if (cachePrevias.size > 2000) cachePrevias.delete(cachePrevias.keys().next().value);
+  return promessa;
 }
 
 // ---------- GIFs: Tenor (TENOR_KEY) ou GIPHY (GIPHY_KEY), com cache curto pra economizar a cota ----------
@@ -1487,6 +1624,42 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         console.error('Busca de GIF', err.message);
         ack({ erro: 'A busca de GIF não respondeu agora. Tenta de novo.' });
       }
+    });
+
+    // ---------- prévia de links ----------
+    let previasPedidas = [];
+    quando('link:previa', async (u, url, ack) => {
+      if (typeof url !== 'string' || url.length > 1000 || !/^https?:\/\/[^\s<]+$/.test(url)) return ack(null);
+      // o mesmo link já buscado não conta; link novo: no máx. 30 por minuto por conexão
+      if (!cachePrevias.has(url)) {
+        previasPedidas = previasPedidas.filter((t) => Date.now() - t < 60e3);
+        if (previasPedidas.length >= 30) return ack(null);
+        previasPedidas.push(Date.now());
+      }
+      ack(await previaDoLink(url));
+    });
+
+    // ---------- sortear times com quem está na chamada ----------
+    quando('times:sortear', (u, { canal, times } = {}, ack) => {
+      if (u.voz == null) return ack({ erro: 'Entra numa sala de voz primeiro' });
+      const voz = sql.canal.get(u.voz);
+      const c = canalDoMembro(canal, u.conta, 'texto');
+      if (!voz || !c || c.servidor !== voz.servidor) return ack({ erro: 'Abre um canal de texto do servidor da chamada pra mandar o resultado' });
+      const nomes = new Map(); // uma vez por conta (mesmo com o app aberto em 2 lugares)
+      for (const x of usuarios.values()) if (x.voz === u.voz && !nomes.has(x.conta)) nomes.set(x.conta, x.nome);
+      const lista = [...nomes.values()];
+      times = Math.trunc(Number(times));
+      if (!(times >= 2 && times <= 4)) return ack({ erro: 'Escolhe de 2 a 4 times' });
+      if (lista.length < times) return ack({ erro: `Precisa de pelo menos ${times} pessoas na chamada` });
+      for (let i = lista.length - 1; i > 0; i--) {
+        const j = randomInt(i + 1);
+        [lista[i], lista[j]] = [lista[j], lista[i]];
+      }
+      const grupos = Array.from({ length: times }, (_, t) => lista.filter((_, i) => i % times === t));
+      const texto = [`🎲 **Times sorteados** (${voz.nome})`, ...grupos.map((g, t) => `**Time ${t + 1}:** ${g.join(', ')}`)].join('\n');
+      publicar(u, c, texto);
+      for (const o of usuarios.values()) if (o.voz === u.voz) io.to(o.socket).emit('times', { por: u.nome, grupos });
+      ack({});
     });
 
     // ---------- enquetes ----------
