@@ -217,7 +217,14 @@ function modeloPraia() {
   ret('efe', 18, 20, 21, 21, 'N');
   return fim({ 1: 'Luau' });
 }
+// área de construção: terreno liso, sem nada, pra montar do zero
+function modeloZero(l = 30, a = 20) {
+  const { ret, fim } = construir(l, a, ',');
+  ret('efe', (l >> 1) - 1, (a >> 1) - 1, l >> 1, a >> 1, 'N');
+  return fim();
+}
 const MODELOS_MAPA = {
+  zero: { nome: 'Do zero (área de construção)', criar: modeloZero },
   casa: { nome: 'Casa', criar: modeloCasa },
   lan: { nome: 'Lan house', criar: modeloLan },
   bar: { nome: 'Bar', criar: modeloBar },
@@ -1088,6 +1095,10 @@ function aplicarMapa(dados) {
     enviarPosicao(true);
   }
   $('#btn-editar-mapa').hidden = !dados.podeEditar || !!editor;
+  if (construirEm && construirEm === estado.voz && dados.podeEditar && !editor) {
+    construirEm = null;
+    abrirEditor();
+  }
   renderRecado();
   iniciarLoopMapa();
   renderGrid();
@@ -1130,7 +1141,7 @@ const TECLAS_MAPA = {
   KeyW: 'cima', ArrowUp: 'cima', KeyS: 'baixo', ArrowDown: 'baixo',
   KeyA: 'esq', ArrowLeft: 'esq', KeyD: 'dir', ArrowRight: 'dir',
 };
-const mapaVisivel = () => !!estado.mapa && estado.view === 'voz' && $('#grid').classList.contains('mapa');
+const mapaVisivel = () => !!estado.mapa && estado.view === 'voz' && /\bmapa(-mini)?\b/.test($('#grid').className);
 window.addEventListener('keydown', (e) => {
   if (!mapaVisivel() || emCampoDeTexto(e) || e.altKey || e.metaKey) return;
   if ($('.modal:not([hidden])')) return;
@@ -1400,7 +1411,8 @@ function desenharMapa(t) {
     cv.width = Math.round(w * dpr);
     cv.height = Math.round(h * dpr);
   }
-  mapa.escala = editor ? editor.zoom : Math.max(2, Math.min(4, Math.round(Math.min(h / (T * 11), w / (T * 16)))));
+  const mini = $('#grid').classList.contains('mapa-mini');
+  mapa.escala = editor ? editor.zoom : Math.max(mini ? 1 : 2, Math.min(4, Math.round(Math.min(h / (T * 11), w / (T * 16)))));
   const s = mapa.escala;
   const c = cv.getContext('2d');
   c.imageSmoothingEnabled = false;
@@ -1552,8 +1564,17 @@ const copiaMapa = (m) => ({
   ...m, chao: [...m.chao], obj: [...m.obj], efe: [...m.efe], areas: { ...m.areas }, portais: { ...m.portais }, recados: { ...m.recados },
 });
 
+// criou uma sala "do zero": entra nela e abre o editor quando o mapa chegar
+let construirEm = null;
+function construirAoEntrar(canal) {
+  construirEm = canal;
+  foco = null;
+  entrarVoz(canal);
+}
+
 function abrirEditor() {
   if (!atual || editor) return;
+  foco = null;
   const eu = pessoasMapa.get(estado.eu.id);
   editor = {
     mapa: copiaMapa(atual), camada: 'chao', pincel: '#', ferramenta: 'pincel', historico: [],
@@ -1566,6 +1587,7 @@ function abrirEditor() {
   $('#btn-editar-mapa').hidden = true;
   $('#mapa').classList.add('editando');
   renderEditor();
+  renderGrid();
   $('#tela-mapa').focus();
 }
 
@@ -1835,6 +1857,22 @@ $('#btn-tamanho-mapa').onclick = () => {
   renderEditor();
 };
 $('#btn-desfazer-mapa').onclick = desfazerEditor;
+// apaga tudo e deixa só o terreno (mesmo tamanho); dá pra desfazer
+$('#btn-zerar-mapa').onclick = () => {
+  if (!confirm('Apagar tudo e começar o mapa do zero? (dá pra desfazer antes de salvar)')) return;
+  guardarDesfazer();
+  const novo = modeloZero(editor.mapa.l, editor.mapa.a);
+  Object.assign(editor.mapa, { chao: novo.chao, obj: novo.obj, efe: novo.efe, areas: {}, portais: {} });
+  editor.portalSel = null;
+  mapaBase = null;
+  renderEditor();
+};
+// diminuir: o mapa vira um bloco do tamanho das câmeras (e volta clicando nele)
+$('#btn-diminuir-mapa').onclick = () => focarTile('mapa');
+$('#ampliar-mapa').onclick = () => {
+  focarTile('mapa');
+  $('#tela-mapa').focus();
+};
 $('#btn-cancelar-mapa').onclick = () => {
   if (editor.historico.length && !confirm('Descartar o que você mudou no mapa?')) return;
   fecharEditor();

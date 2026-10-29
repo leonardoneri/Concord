@@ -1558,7 +1558,7 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .srv-novo select, .srv-mapa { padding: 7px 8px; background: #1e1f22; border-radius: 4px; flex: none; max-width: 190px; }
 .srv-cargo .srv-cargo-mapa { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--texto-2); white-space: nowrap; cursor: pointer; }
 .srv-cargo .srv-cargo-mapa input { flex: none; padding: 0; }
-#mapa.editando .barra-mapa #emotes-mapa, #mapa.editando #btn-boneco { display: none; }
+#mapa.editando .barra-mapa #emotes-mapa, #mapa.editando #btn-boneco, #mapa.editando #btn-diminuir-mapa { display: none; }
 #editor-mapa {
   position: absolute; top: 8px; left: 8px; bottom: 48px; width: 236px; z-index: 1;
   display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow-y: auto;
@@ -1582,8 +1582,8 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .tamanho-mapa label { flex: 1; min-width: 0; }
 .tamanho-mapa input { width: 100%; }
 .tamanho-mapa .btn-secundario, .acoes-editor button { padding: 6px 10px; font-size: 13px; }
-.acoes-editor { display: flex; gap: 6px; margin-top: auto; }
-.acoes-editor .btn-primario { margin-left: auto; }
+.acoes-editor { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: auto; position: sticky; bottom: -10px; margin-bottom: -10px; padding: 8px 0 10px; background: #111214; }
+.acoes-editor .btn-primario { grid-column: 1 / -1; }
 .acoes-editor button:disabled { opacity: .5; cursor: default; }
 #linha-portal { display: grid; gap: 6px; }
 #linha-portal[hidden] { display: none; }
@@ -1595,3 +1595,14 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 #recado-atual.vazio { background: #2b2d31; color: var(--texto-2); font-style: italic; }
 #recado-por { margin: 0; font-size: 12px; }
 #recado-texto { resize: vertical; padding: 8px; background: #1e1f22; }
+
+/* mapa diminuído: fica por cima de um bloco reservado na faixa, igual ao assistir junto */
+#grid.mapa-mini #mapa { display: flex; position: absolute; z-index: 2; gap: 0; border-radius: 8px; overflow: hidden; }
+#grid.mapa-mini .barra-mapa, #grid.mapa-mini #editor-mapa, #grid.mapa-mini #zona-mapa { display: none; }
+#grid.mapa-mini #tela-mapa { border-radius: 0; }
+#ampliar-mapa { display: none; }
+#grid.mapa-mini #ampliar-mapa {
+  display: flex; align-items: flex-end; position: absolute; inset: 0; padding: 8px; border: 0; background: transparent; cursor: pointer;
+}
+#ampliar-mapa span { padding: 2px 8px; border-radius: 4px; background: #000a; color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+#ampliar-mapa:hover span { background: var(--acento); }

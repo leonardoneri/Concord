@@ -2791,19 +2791,20 @@ function focarTile(chave) {
 // vídeo diminuído: o player (que não pode mudar de lugar no DOM, senão o YouTube recarrega)
 // fica por cima de um bloco reservado na faixa, do mesmo tamanho dos outros
 function posicionarMini() {
-  const box = $('#assistir');
-  const lugar = $('#grid').classList.contains('assistindo-mini') && $('#tira .tile-assistir');
-  if (!lugar) {
-    box.style.cssText = '';
-    return;
-  }
   const g = $('#grid').getBoundingClientRect();
-  const r = lugar.getBoundingClientRect();
-  const visivel = r.width > 0 && r.height > 0;
-  Object.assign(box.style, {
-    left: `${r.left - g.left}px`, top: `${r.top - g.top}px`, width: `${r.width}px`, height: `${r.height}px`,
-    visibility: visivel ? '' : 'hidden',
-  });
+  for (const [box, classe, bloco] of [[$('#assistir'), 'assistindo-mini', '.tile-assistir'], [$('#mapa'), 'mapa-mini', '.tile-mapa']]) {
+    const lugar = $('#grid').classList.contains(classe) && $(`#tira ${bloco}`);
+    if (!lugar) {
+      box.style.cssText = '';
+      continue;
+    }
+    const r = lugar.getBoundingClientRect();
+    const visivel = r.width > 0 && r.height > 0;
+    Object.assign(box.style, {
+      left: `${r.left - g.left}px`, top: `${r.top - g.top}px`, width: `${r.width}px`, height: `${r.height}px`,
+      visibility: visivel ? '' : 'hidden',
+    });
+  }
 }
 new ResizeObserver(posicionarMini).observe($('#grid'));
 $('#tira').addEventListener('scroll', posicionarMini);
@@ -2830,17 +2831,25 @@ function renderGrid() {
     }
   }
 
-  // mapa ligado: só aparece o vídeo de quem está perto, e nada vai pro grande sozinho (só clicando)
+  // mapa ligado: só aparece o vídeo de quem está perto, e nada vai pro grande sozinho (só clicando).
+  // O próprio mapa é o destaque 'mapa'; clicando em diminuir ele vira um bloco igual aos outros.
   const noMapa = !!(estado.voz && estado.mapa);
   if (noMapa) desejados.splice(0, desejados.length, ...desejados.filter((d) => d.local || pertoNoMapa(d.u.id)));
   const assistindo = !!(estado.voz && estado.assistir);
-  const destaque = noMapa
-    ? (foco === 'assistir' ? assistindo : desejados.some((d) => d.chave === foco)) ? foco : null
-    : escolherDestaque(desejados, assistindo);
+  let destaque;
+  if (noMapa) {
+    const existe = foco === 'assistir' ? assistindo : desejados.some((d) => d.chave === foco);
+    destaque = editor || foco === null || foco === 'mapa' ? 'mapa' : foco === false ? null : existe ? foco : 'mapa';
+  } else {
+    destaque = escolherDestaque(desejados, assistindo);
+  }
   destaqueAtual = destaque;
+  const mapaGrande = destaque === 'mapa';
+  if (mapaGrande) destaque = null;
   const videoGrande = destaque === 'assistir';
-  grid.classList.toggle('mapa', noMapa && !destaque);
-  $('#btn-mapa').hidden = !noMapa || !destaque;
+  grid.classList.toggle('mapa', mapaGrande);
+  grid.classList.toggle('mapa-mini', noMapa && !mapaGrande);
+  $('#btn-mapa').hidden = !noMapa || mapaGrande;
   grid.classList.toggle('foco', !!destaque);
   grid.classList.toggle('assistindo', videoGrande);
   grid.classList.toggle('assistindo-mini', assistindo && !videoGrande);
@@ -2860,7 +2869,19 @@ function renderGrid() {
   } else {
     reserva?.remove();
   }
-  const existentes = new Map([...grid.querySelectorAll('.tile:not(.tile-assistir)')].map((t) => [t.dataset.chave, t]));
+  // e o do mapa diminuído (logo depois)
+  let reservaMapa = tira.querySelector('.tile-mapa');
+  if (noMapa && !mapaGrande) {
+    if (!reservaMapa) {
+      reservaMapa = el('div', 'tile tile-mapa');
+      reservaMapa.dataset.chave = 'mapa';
+    }
+    const antes = reserva?.isConnected ? reserva.nextElementSibling : tira.firstElementChild;
+    if (antes !== reservaMapa) tira.insertBefore(reservaMapa, antes);
+  } else {
+    reservaMapa?.remove();
+  }
+  const existentes = new Map([...grid.querySelectorAll('.tile:not(.tile-assistir):not(.tile-mapa)')].map((t) => [t.dataset.chave, t]));
   for (const d of desejados) {
     let tile = existentes.get(d.chave);
     if (tile) existentes.delete(d.chave);
@@ -4717,9 +4738,16 @@ $('#btn-remover-icone').onclick = () => socket.emit('servidor:icone', null, resp
 $$('.srv-novo').forEach((form) => form.addEventListener('submit', (e) => {
   e.preventDefault();
   const input = form.querySelector('input');
-  const modelo = form.dataset.tipo === 'voz' && MODELOS_MAPA[$('#mapa-nova-sala').value];
+  const qual = form.dataset.tipo === 'voz' && $('#mapa-nova-sala').value;
+  const modelo = qual && MODELOS_MAPA[qual];
   socket.emit('canal:criar', { tipo: form.dataset.tipo, nome: input.value, mapa: modelo ? modelo.criar() : undefined }, (res) => {
     if (res?.erro) return avisar(res.erro);
+    // sala pra construir do zero: já entra nela com o editor aberto
+    if (qual === 'zero' && res?.id) {
+      input.value = '';
+      $('#modal-servidor').hidden = true;
+      return construirAoEntrar(res.id);
+    }
     input.value = '';
     renderModalServidor(true);
     input.focus();
