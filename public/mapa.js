@@ -247,8 +247,81 @@ function rnd(x, y, i = 0) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
+// ---------- peças do Kenney (kenney.nl, licença CC0: public/kenney/LICENCA.txt) ----------
+// a letra do mapa aponta pra um pedaço das folhas; o que não existe lá continua desenhado aqui no código
+const FOLHAS = { cidade: carregarFolha('kenney/cidade.png'), casa: carregarFolha('kenney/interior.png') };
+function carregarFolha(src) {
+  const img = new Image();
+  img.onload = () => {
+    mapaBase = null;
+    if (editor) renderEditor();
+  };
+  img.src = src;
+  return img;
+}
+const temFolha = (folha) => FOLHAS[folha].naturalWidth > 0;
+// as folhas têm 1px de espaço entre as peças (passo de 17px)
+function peca(c, folha, col, lin, tx, ty, { semTopo = false, semPe = false } = {}) {
+  if (!temFolha(folha)) return false;
+  const img = FOLHAS[folha];
+  const sx = col * 17;
+  const sy = lin * 17;
+  c.drawImage(img, sx, sy, 16, 16, tx * T, ty * T, T, T);
+  // mesa de várias linhas: cobre o contorno de cima e/ou os pés com uma faixa lisa do tampo
+  if (semTopo) c.drawImage(img, sx, sy + 4, 16, 4, tx * T, ty * T, T, 4);
+  if (semPe) for (let y = 8; y < 16; y += 4) c.drawImage(img, sx, sy + 4, 16, 4, tx * T, ty * T + y, T, 4);
+  return true;
+}
+function chaoKenney(c, m, ch, tx, ty) {
+  switch (ch) {
+    case ',': return peca(c, 'cidade', rnd(tx, ty, 99) < 0.8 ? 0 : 1, 0, tx, ty);
+    case '*': return peca(c, 'cidade', 2, 0, tx, ty);
+    case ':': { // caminho de terra: a borda de grama só aparece do lado que tem grama
+      const grama = (dx, dy) => ',*'.includes(chaoEm(m, tx + dx, ty + dy));
+      const col = grama(-1, 0) && !grama(1, 0) ? 0 : grama(1, 0) && !grama(-1, 0) ? 2 : 1;
+      const lin = grama(0, -1) && !grama(0, 1) ? 1 : grama(0, 1) && !grama(0, -1) ? 3 : 2;
+      return peca(c, 'cidade', col, lin, tx, ty);
+    }
+  }
+  return false;
+}
+function objKenney(c, m, ch, tx, ty) {
+  const igual = (dx, dy) => objEm(m, tx + dx, ty + dy) === ch;
+  const esq = igual(-1, 0);
+  const dir = igual(1, 0);
+  // peça comprida: 0 = ponta esquerda, 1 = meio, 2 = ponta direita, -1 = sozinha na linha
+  const lado = esq && dir ? 1 : dir ? 0 : esq ? 2 : -1;
+  const p = (col, lin, corte) => peca(c, 'casa', col, lin, tx, ty, corte);
+  switch (ch) {
+    case 'T': return peca(c, 'cidade', 4, rnd(tx, ty, 98) < 0.75 ? 1 : 2, tx, ty);
+    case 'P': return p(rnd(tx, ty, 97) < 0.5 ? 16 : 17, 0);
+    case 'L': return p(20, 17);
+    case 'k': return p(16, 3);
+    case 'd': return p(17, 3);
+    case 'F': return p(14, 15);
+    case 'G': return p(11, 16);
+    case 'E': return p(12, 17);
+    case 'h': { // a cadeira olha pra mesa
+      const mesa = (dx, dy) => objEm(m, tx + dx, ty + dy) === 'M';
+      return mesa(0, -1) ? p(1, 2) : mesa(1, 0) ? p(2, 2) : mesa(-1, 0) ? p(3, 2) : p(0, 2);
+    }
+    case 'S': return lado < 0 ? p(0, 7) : p([4, 5, 7][lado], 7);
+    case 'B': return lado < 0 ? p(1, 12) : p([8, 9, 10][lado], 15);
+    case 'M': {
+      const cima = igual(0, -1);
+      const baixo = igual(0, 1);
+      if (!cima && !baixo) return lado < 0 ? p(4, 2) : p([4, 5, 6][lado], 4); // mesa de uma linha só
+      // mais de uma linha: emenda as peças (só a primeira tem contorno em cima e só a última tem pés)
+      const corte = { semTopo: cima, semPe: baixo };
+      return lado < 0 ? p(5, 0, corte) : p(lado, 0, corte);
+    }
+  }
+  return false;
+}
+
 // ---------- tiles ----------
 function pintarChao(c, m, ch, tx, ty) {
+  if (chaoKenney(c, m, ch, tx, ty)) return;
   const X = tx * T;
   const Y = ty * T;
   const p = (cor, x, y, w = 1, h = 1) => { c.fillStyle = cor; c.fillRect(X + x, Y + y, w, h); };
@@ -355,6 +428,7 @@ function pintarChao(c, m, ch, tx, ty) {
 }
 
 function pintarObj(c, m, ch, tx, ty) {
+  if (objKenney(c, m, ch, tx, ty)) return;
   const X = tx * T;
   const Y = ty * T;
   const p = (cor, x, y, w = 1, h = 1) => { c.fillStyle = cor; c.fillRect(X + x, Y + y, w, h); };
@@ -647,7 +721,7 @@ function prepararMapa() {
       const e = m.efe[y][x];
       pintarChao(b, m, ch, x, y);
       if (o !== ' ') pintarObj(b, m, o, x, y);
-      if (o === 'T') pintarCopa(t, x, y);
+      if (o === 'T' && !temFolha('cidade')) pintarCopa(t, x, y);
       if (o === 'U' || o === 'Y') pintarAlto(t, o, x, y);
       if (ch === '~' || ch === 'l') animados.push({ ch, x, y });
       if ('oAVCE'.includes(o)) animados.push({ ch: o, x, y });
@@ -1656,7 +1730,7 @@ function previaTile(camada, letra) {
   const m = { l: 1, a: 1, chao: [chao], obj: [camada === 'obj' ? letra : ' '], efe: [' '] };
   pintarChao(c, m, chao, 0, 0);
   if (camada === 'obj') pintarObj(c, m, letra, 0, 0);
-  if ('TUY'.includes(letra)) {
+  if ('UY'.includes(letra) || letra === 'T' && !temFolha('cidade')) {
     c.save();
     c.translate(0, 8);
     if (letra === 'T') pintarCopa(c, 0, 0);

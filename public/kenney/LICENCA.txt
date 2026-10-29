@@ -1,0 +1,7 @@
+Peças de mapa feitas pelo Kenney (www.kenney.nl), licença CC0 (domínio público):
+http://creativecommons.org/publicdomain/zero/1.0/
+
+cidade.png   = Tiny Town (kenney.nl/assets/tiny-town)
+interior.png = Roguelike Indoors (kenney.nl/assets/roguelike-indoors)
+
+Obrigado, Kenney!
