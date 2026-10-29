@@ -1,5 +1,18 @@
 [
   {
+    "versao": "1.0.15",
+    "itens": [
+      "Mapa da chamada: as salas de voz podem ter uma sala em pixel art, onde você anda com seu boneco e ouve mais alto quem está perto",
+      "Áreas fechadas (só ouve quem está dentro) e palco (quem sobe é ouvido pela sala toda)",
+      "\"Meu boneco\": escolha pele, cabelo, roupa e calça; emotes com as teclas 1 a 5",
+      "Ao criar uma sala de voz dá pra escolher se tem mapa e qual modelo: Casa, Lan house, Bar, Praia ou Gramado vazio",
+      "Editor de mapa (admins e cargos com \"Constrói mapas\"): chão, objetos e efeitos, com pincel, retângulo e desfazer",
+      "Portais: pisou, vai pra outro ponto da sala ou direto pra outra sala de voz com mapa",
+      "Tecla E perto de objetos: TV abre o Assistir junto e o quadro de recados guarda um recado pra galera",
+      "Grama, árvores e móveis com desenhos do Kenney (kenney.nl)"
+    ]
+  },
+  {
     "versao": "1.0.14",
     "itens": [
       "Assistir junto com fila: \"+ Vídeo\" põe na fila ou toca agora, cola link de playlist que entram todos os vídeos, e dá pra pular, tirar ou clicar em qualquer um da lista",
