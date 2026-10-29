@@ -563,7 +563,8 @@ function aplicarServidor(srv) {
 }
 
 // Troca o servidor aberto (id vazio = nenhum: mostra a tela de criar/entrar; 'dm' = conversas diretas)
-function abrirServidor(id, canal) {
+// entrar = abriu o servidor clicando: cai direto na sala principal (se tiver e se não estiver em chamada)
+function abrirServidor(id, canal, entrar = false) {
   fecharPopovers();
   if (id === 'dm') return abrirDms(canal);
   if (id == null) {
@@ -593,6 +594,7 @@ function abrirServidor(id, canal) {
     salvarStorage('servidorAtivo', id);
     const preferido = canal ?? (trocou ? lerStorage('ultimoCanal', {})[id] : estado.canalTexto);
     abrirTexto((estado.canaisTexto.find((c) => c.id === preferido) ?? estado.canaisTexto[0])?.id);
+    if (entrar && !estado.voz && res.servidor.entrada) entrarVoz(res.servidor.entrada);
   });
 }
 
@@ -649,7 +651,7 @@ function entrarComConvite(convite) {
       return;
     }
     $('#modal-novo-servidor').hidden = true;
-    abrirServidor(res.id);
+    abrirServidor(res.id, undefined, true);
   });
 }
 
@@ -987,7 +989,7 @@ function renderRail() {
     pintarIconeServidor(ic, srv);
     item.append(el('span', 'pill'), ic);
     if (estado.srvMencoes.get(srv.id)) item.append(contador(estado.srvMencoes.get(srv.id)));
-    item.onclick = () => { if (srv.id !== estado.servidor.id) abrirServidor(srv.id); };
+    item.onclick = () => { if (srv.id !== estado.servidor.id) abrirServidor(srv.id, undefined, true); };
     item.oncontextmenu = (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -4691,6 +4693,10 @@ function renderModalServidor(forcar = false) {
     const lista = srv.canais.filter((c) => c.tipo === tipo);
     $(`#srv-canais-${tipo}`).replaceChildren(...lista.map((c) => linhaCanal(c, lista)));
   }
+  const entrada = $('#srv-entrada');
+  entrada.replaceChildren(Object.assign(el('option', null, 'Nenhuma (cada um escolhe a sala)'), { value: '' }),
+    ...srv.canais.filter((c) => c.tipo === 'voz').map((c) => Object.assign(el('option', null, c.mapa ? `${c.nome} (com mapa)` : c.nome), { value: String(c.id) })));
+  entrada.value = srv.entrada ? String(srv.entrada) : '';
   renderCargosServidor();
   renderEmojisServidor();
   $('#srv-admins').replaceChildren(...estado.perfis.map((p) => {
@@ -4735,6 +4741,7 @@ $('#input-icone').onchange = (e) => {
   e.target.value = '';
 };
 $('#btn-remover-icone').onclick = () => socket.emit('servidor:icone', null, respostaServidor);
+$('#srv-entrada').onchange = (e) => socket.emit('servidor:entrada', e.target.value ? Number(e.target.value) : null, respostaServidor);
 $$('.srv-novo').forEach((form) => form.addEventListener('submit', (e) => {
   e.preventDefault();
   const input = form.querySelector('input');

@@ -247,6 +247,17 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('tirar o mapa avisa quem está na sala', (await tirou) === null && (await emit(leo, 'mapa:estado')) === null);
   await emit(leo, 'canal:mapa', { id: salaMapa, mapa: mapaTeste });
   ok('pôr mapa numa sala que já existe', (await emit(leo, 'mapa:estado'))?.mapa.l === 10);
+  // mapa "igual Discord" e sala principal do servidor
+  await emit(leo, 'mapa:salvar', { ...mapaTeste, aberto: true });
+  ok('mapa guarda o modo aberto', (await emit(leo, 'mapa:estado')).mapa.aberto === true);
+  await emit(leo, 'mapa:salvar', { ...mapaTeste, aberto: 'sim' });
+  ok('modo aberto só com true', (await emit(leo, 'mapa:estado')).mapa.aberto === false);
+  ok('sala principal tem que ser de voz', !!(await emit(leo, 'servidor:entrada', geral)).erro);
+  ok('ana não escolhe a sala principal', !!(await emit(ana, 'servidor:entrada', salaMapa)).erro);
+  const comEntrada = proximo(ana, 'servidor');
+  ok('admin escolhe a sala principal', !(await emit(leo, 'servidor:entrada', salaMapa)).erro);
+  ok('a sala principal chega pra galera', (await comEntrada)?.entrada === salaMapa);
+  await emit(leo, 'servidor:entrada', null);
   // portais e quadro de recados
   const comPortal = {
     ...mapaTeste, efe: ['O         ', ...linhas(' ').slice(1)], obj: [' R        ', ...linhas(' ').slice(1)],

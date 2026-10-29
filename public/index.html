@@ -183,6 +183,9 @@
                   <input id="nome-area-mapa" maxlength="24" placeholder="Ex.: Sala de reunião" autocomplete="off">
                 </label>
                 <p class="dica-cfg" id="dica-editor"></p>
+                <label class="linha-aberto" title="Desligado: ouve mais alto quem está perto. Ligado: fora das áreas fechadas é igual a uma sala do Discord.">
+                  <input type="checkbox" id="mapa-aberto"> Fora das áreas, todo mundo se ouve
+                </label>
                 <div class="tamanho-mapa">
                   <label>Largura <input type="number" id="largura-mapa" min="8" max="64"></label>
                   <label>Altura <input type="number" id="altura-mapa" min="8" max="64"></label>
@@ -399,6 +402,10 @@
           </select>
           <button class="btn-primario">Criar</button>
         </form>
+        <label class="srv-entrada">Sala principal
+          <select id="srv-entrada"></select>
+        </label>
+        <p class="dica-cfg">Quem abrir o servidor entra direto nessa sala, já com o microfone ligado (e aparece no saguão, se ela tiver mapa).</p>
       </section>
       <section>
         <h3>Cargos</h3>

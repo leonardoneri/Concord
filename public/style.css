@@ -1606,3 +1606,9 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 }
 #ampliar-mapa span { padding: 2px 8px; border-radius: 4px; background: #000a; color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 #ampliar-mapa:hover span { background: var(--acento); }
+
+/* game house: sala principal do servidor e mapa "igual Discord" */
+.srv-entrada { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; color: var(--forte); }
+.srv-entrada select { flex: 1; padding: 7px 8px; background: #1e1f22; border-radius: 4px; }
+.linha-aberto { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.linha-aberto input { flex: none; }

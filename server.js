@@ -178,7 +178,8 @@ function limparMapa(m) {
     const y = ponto(v.y);
     portais[k] = { canal, x: x != null && y != null ? x : null, y: x != null && y != null ? y : null };
   }
-  return { l, a, chao, obj, efe, areas, portais, recados: {} };
+  // aberto: fora das áreas todo mundo se ouve no volume cheio (igual Discord); senão é por proximidade
+  return { l, a, chao, obj, efe, areas, portais, recados: {}, aberto: m.aberto === true };
 }
 // recados que continuam valendo: só os que estão em cima de um quadro
 function recadosQueFicam(recados, mapa) {
@@ -538,6 +539,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     mensagens: { conta: 'INTEGER', editado_em: 'INTEGER', fixada: 'INTEGER NOT NULL DEFAULT 0', canal_id: 'INTEGER', resposta: 'INTEGER', enquete: 'TEXT' },
     canais: { servidor: 'INTEGER', privado: 'INTEGER NOT NULL DEFAULT 0', mapa: 'TEXT' },
     cargos: { construtor: 'INTEGER NOT NULL DEFAULT 0' },
+    servidores: { entrada: 'INTEGER' },
   };
   for (const [tabela, colunas] of Object.entries(colunasNovas)) {
     const existentes = new Set(db.prepare(`PRAGMA table_info(${tabela})`).all().map((c) => c.name));
@@ -584,6 +586,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     criarServidor: db.prepare('INSERT INTO servidores (nome, dono, convite, criado_em) VALUES (?, ?, ?, ?)'),
     editarServidor: db.prepare('UPDATE servidores SET nome = ? WHERE id = ?'),
     iconeServidor: db.prepare('UPDATE servidores SET icone = ? WHERE id = ?'),
+    entradaServidor: db.prepare('UPDATE servidores SET entrada = ? WHERE id = ?'),
     conviteServidor: db.prepare('UPDATE servidores SET convite = ? WHERE id = ?'),
     apagarServidor: db.prepare('DELETE FROM servidores WHERE id = ?'),
     membro: db.prepare('SELECT * FROM membros WHERE servidor = ? AND conta = ?'),
@@ -765,12 +768,15 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   // `conta`: só os canais que essa pessoa pode ver (canais privados)
   function estadoServidor(id, conta) {
     const s = sql.servidor.get(id);
+    const canais = sql.canaisDo.all(id).filter((c) => podeVerCanal(c, conta)).map(({ id: cid, tipo, nome, topico, privado, mapa }) => ({
+      id: cid, tipo, nome, topico, privado: !!privado, cargos: privado ? sql.cargosDoCanal.all(cid).map((x) => x.cargo) : [], mapa: !!mapa,
+    }));
     return {
       ...resumoServidor(s),
       convite: s.convite,
-      canais: sql.canaisDo.all(id).filter((c) => podeVerCanal(c, conta)).map(({ id: cid, tipo, nome, topico, privado, mapa }) => ({
-        id: cid, tipo, nome, topico, privado: !!privado, cargos: privado ? sql.cargosDoCanal.all(cid).map((x) => x.cargo) : [], mapa: !!mapa,
-      })),
+      canais,
+      // sala principal: quem abre o servidor entra direto nela (some se a pessoa não puder ver o canal)
+      entrada: canais.some((c) => c.id === s.entrada && c.tipo === 'voz') ? s.entrada : null,
       cargos: sql.cargosDo.all(id).map((c) => ({ ...c, construtor: !!c.construtor })),
       eventos: sql.eventosDo.all(id, Date.now() - DURA_EVENTO).map(eventoPublico),
       emojis: sql.emojisDo.all(id),
@@ -1262,6 +1268,16 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const limpo = limparNomeServidor(nome);
       if (limpo.erro) return ack(limpo);
       sql.editarServidor.run(limpo.nome, srv);
+      emitirServidor(srv);
+      ack({});
+    });
+
+    quandoAdmin('servidor:entrada', (u, canal, ack, srv) => {
+      if (canal != null) {
+        const c = sql.canal.get(Number(canal));
+        if (!c || c.servidor !== srv || c.tipo !== 'voz') return ack({ erro: 'Escolha uma sala de voz deste servidor' });
+      }
+      sql.entradaServidor.run(canal == null ? null : Number(canal), srv);
       emitirServidor(srv);
       ack({});
     });

@@ -223,7 +223,87 @@ function modeloZero(l = 30, a = 20) {
   ret('efe', (l >> 1) - 1, (a >> 1) - 1, l >> 1, a >> 1, 'N');
   return fim();
 }
+// Game House: saguão e área comum onde todo mundo se ouve, escritórios gamer fechados, cozinha e cinema
+function modeloGameHouse() {
+  const { g, ret, fim } = construir(48, 34, '.');
+  paredes(ret, 0, 0, 47, 33);
+  ret('chao', 23, 33, 24, 33, '+');
+  // escritórios em cima: 6 salas fechadas com PC gamer
+  const areas = {};
+  for (let i = 0; i < 6; i++) {
+    const a0 = 1 + i * 8;
+    const a1 = Math.min(a0 + 6, 46);
+    if (i) ret('chao', a0 - 1, 0, a0 - 1, 8, '#');
+    ret('chao', a0, 1, a1, 7, 'k');
+    ret('chao', a0 - 1, 8, a1 + 1, 8, '#');
+    g.chao[8][a0 + 3] = '+';
+    ret('obj', a0 + 1, 2, a0 + 3, 2, 'C');
+    g.obj[3][a0 + 2] = 'K';
+    g.obj[1][a1] = 'L';
+    g.obj[6][a1] = 'P';
+    g.obj[5][a0] = 'd';
+    g.obj[1][a0] = 'E';
+    ret('efe', a0, 1, a1, 7, String(i + 1));
+    areas[i + 1] = `Escritório ${i + 1}`;
+  }
+  // cozinha (embaixo, à esquerda)
+  ret('chao', 0, 17, 15, 17, '#');
+  ret('chao', 15, 17, 15, 33, '#');
+  ret('chao', 1, 18, 14, 32, '_');
+  g.chao[17][7] = '+';
+  g.obj[18][1] = 'G';
+  g.obj[18][2] = 'G';
+  g.obj[18][3] = 'F';
+  ret('obj', 4, 18, 10, 18, 'B');
+  g.obj[18][14] = 'P';
+  ret('obj', 5, 24, 9, 25, 'M');
+  ret('obj', 5, 23, 9, 23, 'h');
+  ret('obj', 5, 26, 9, 26, 'h');
+  ret('obj', 3, 30, 5, 30, 'B');
+  for (let x = 3; x <= 5; x++) g.obj[31][x] = 'k';
+  g.obj[32][14] = 'P';
+  ret('efe', 1, 18, 14, 32, '7');
+  areas[7] = 'Cozinha';
+  // cinema (embaixo, à direita)
+  ret('chao', 31, 17, 47, 17, '#');
+  ret('chao', 31, 17, 31, 33, '#');
+  ret('chao', 32, 18, 46, 32, 'e');
+  ret('chao', 33, 21, 45, 29, '=');
+  g.chao[17][38] = '+';
+  ret('obj', 34, 18, 44, 18, 'V');
+  g.obj[18][33] = 'E';
+  g.obj[18][45] = 'E';
+  ret('obj', 34, 22, 44, 22, 'S');
+  ret('obj', 34, 25, 44, 25, 'S');
+  for (let x = 35; x <= 43; x += 2) g.obj[28][x] = 'd';
+  g.obj[32][32] = 'P';
+  g.obj[32][46] = 'P';
+  ret('efe', 32, 18, 46, 32, '8');
+  areas[8] = 'Cinema';
+  // área comum: corredor dos escritórios com jogos e o saguão na entrada
+  ret('obj', 2, 10, 4, 10, 'A');
+  ret('obj', 9, 11, 11, 12, 'Q');
+  g.obj[12][46] = 'D';
+  g.obj[9][24] = 'R';
+  g.obj[9][1] = 'P';
+  g.obj[9][46] = 'P';
+  ret('obj', 40, 11, 42, 11, 'B');
+  for (let x = 40; x <= 42; x++) g.obj[12][x] = 'k';
+  g.obj[10][44] = 'G';
+  ret('chao', 18, 20, 28, 26, '=');
+  ret('obj', 19, 20, 27, 20, 'S');
+  ret('obj', 21, 22, 25, 23, 'M');
+  ret('obj', 19, 25, 20, 25, 'd');
+  ret('obj', 26, 25, 27, 25, 'd');
+  g.obj[18][16] = 'P';
+  g.obj[18][30] = 'P';
+  g.obj[32][16] = 'L';
+  g.obj[32][30] = 'L';
+  ret('efe', 21, 29, 26, 31, 'N');
+  return { ...fim(areas), aberto: true };
+}
 const MODELOS_MAPA = {
+  gamehouse: { nome: 'Game House', criar: modeloGameHouse },
   zero: { nome: 'Do zero (área de construção)', criar: modeloZero },
   casa: { nome: 'Casa', criar: modeloCasa },
   lan: { nome: 'Lan house', criar: modeloLan },
@@ -963,6 +1043,7 @@ function fatorMapa(id) {
   const za = areaEm(eu);
   const zb = areaEm(o);
   if (za || zb) return za === zb ? 1 : 0;
+  if (estado.mapa.mapa.aberto) return 1; // área comum "igual Discord": todo mundo se ouve
   const d = Math.hypot(eu.x - o.x, eu.y - o.y);
   if (d <= PERTO) return 1;
   if (d >= LONGE) return 0;
@@ -1050,6 +1131,9 @@ function aplicarMapa(dados) {
     return;
   }
   if (!antes) foco = null;
+  $('#info-mapa').textContent = dados.mapa.aberto
+    ? 'WASD ou setas pra andar · aqui fora todo mundo se ouve · entre numa sala fechada pra falar só com quem está lá'
+    : 'WASD ou setas pra andar · clique pra ir até lá · perto = ouve mais alto';
   // o desenho mudou (alguém salvou o editor): refaz, a não ser que eu esteja editando o meu rascunho
   const chave = JSON.stringify(dados.mapa);
   if (chave !== mapa.chave) {
@@ -1796,6 +1880,7 @@ function renderEditor() {
     ? 'Áreas fechadas: quem está dentro só ouve quem está na mesma área. Pinte com o mesmo número.'
     : 'Clique e arraste pra pintar · botão direito apaga · WASD mexe a câmera · roda do mouse dá zoom · Ctrl+Z desfaz';
   renderPortalEditor();
+  $('#mapa-aberto').checked = !!editor.mapa.aberto;
   if (document.activeElement !== $('#largura-mapa')) $('#largura-mapa').value = editor.mapa.l;
   if (document.activeElement !== $('#altura-mapa')) $('#altura-mapa').value = editor.mapa.a;
   $('#btn-desfazer-mapa').disabled = !editor.historico.length;
@@ -1857,6 +1942,9 @@ $('#btn-tamanho-mapa').onclick = () => {
   renderEditor();
 };
 $('#btn-desfazer-mapa').onclick = desfazerEditor;
+$('#mapa-aberto').onchange = (e) => {
+  editor.mapa.aberto = e.target.checked;
+};
 // apaga tudo e deixa só o terreno (mesmo tamanho); dá pra desfazer
 $('#btn-zerar-mapa').onclick = () => {
   if (!confirm('Apagar tudo e começar o mapa do zero? (dá pra desfazer antes de salvar)')) return;
