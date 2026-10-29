@@ -305,53 +305,68 @@ function modeloGameHouse() {
   ret('efe', 21, 29, 26, 31, 'N');
   return { ...fim(areas), aberto: true };
 }
-// escritório: área aberta com mesas, reunião, sala do chefe, copa e recepção com sofás
+// escritório: área aberta cheia de mesas, lounge, recepção, reunião, sala do chefe e copa
 function modeloEscritorio() {
   const { g, ret, fim } = construir(40, 26, 'k');
+  const pos = (lista, ch) => lista.forEach(([x, y]) => { g.obj[y][x] = ch; });
   paredes(ret, 0, 0, 39, 25);
   ret('chao', 13, 25, 14, 25, '+');
-  // área aberta: três fileiras de mesas com computador
-  for (const y of [3, 7, 11]) {
-    for (const [x0, x1] of [[3, 10], [15, 22]]) {
+  // área aberta: quatro fileiras de mesas com computador, em três blocos
+  for (const y of [2, 5, 8, 11]) {
+    for (const [x0, x1] of [[2, 7], [10, 15], [18, 22]]) {
       ret('obj', x0, y, x1, y, 'C');
       ret('obj', x0, y + 1, x1, y + 1, 's');
     }
   }
-  for (const x of [5, 13, 21]) g.obj[0][x] = 'q';
-  g.obj[1][1] = 'P';
-  g.obj[1][26] = 'P';
-  ret('obj', 12, 1, 14, 1, 'r');
-  g.obj[15][1] = 'v';
-  g.obj[15][26] = 'v';
-  // recepção e sofás perto da entrada
+  pos([[3, 0], [7, 0], [11, 0], [15, 0], [19, 0]], 'q');
+  // cantinho do café e arquivo no canto direito
+  g.obj[1][24] = 'G';
+  ret('obj', 25, 1, 26, 1, 'B');
+  pos([[26, 4], [1, 1], [1, 13], [9, 14], [17, 14]], 'P');
+  pos([[26, 7], [26, 8]], 'L');
+  pos([[26, 11], [26, 12]], 'r');
+  pos([[1, 7], [25, 14]], 'v');
+  g.obj[14][26] = 'P';
+  // divisória entre a área aberta e a recepção (com passagens)
+  pos([[1, 16], [4, 16], [8, 16], [19, 16], [22, 16], [26, 16]], 'P');
+  pos([[2, 16], [3, 16], [23, 16], [24, 16], [25, 16]], 'L');
+  // lounge com dois sofás
   ret('chao', 1, 17, 26, 24, '.');
-  ret('chao', 3, 19, 10, 23, '=');
-  ret('obj', 4, 19, 9, 19, 'S');
-  ret('obj', 5, 21, 8, 21, 'M');
-  g.obj[22][3] = 'n';
-  g.obj[22][10] = 'n';
-  g.obj[23][3] = 't';
-  ret('obj', 16, 20, 20, 20, 'B');
-  g.obj[19][18] = 's';
-  g.obj[17][24] = 'R';
-  g.obj[24][1] = 'P';
-  g.obj[24][26] = 'P';
-  g.obj[17][1] = 'L';
-  g.obj[17][2] = 'L';
+  ret('chao', 2, 18, 10, 23, '=');
+  ret('obj', 3, 18, 8, 18, 'S');
+  ret('obj', 4, 20, 7, 20, 'M');
+  ret('obj', 3, 22, 8, 22, 'S');
+  pos([[2, 20], [9, 20]], 'n');
+  g.obj[18][10] = 't';
+  g.obj[18][2] = 'c';
+  g.obj[23][10] = 'v';
+  // recepção e área de espera
+  ret('obj', 17, 20, 21, 20, 'B');
+  g.obj[19][19] = 's';
+  pos([[16, 19], [22, 19]], 'P');
+  g.obj[17][21] = 'R';
+  pos([[23, 22], [24, 22], [26, 22]], 'n');
+  g.obj[22][25] = 't';
+  pos([[1, 24], [26, 24]], 'P');
+  g.obj[17][26] = 'v';
+  g.obj[17][1] = 'g';
   // salas fechadas à direita
   ret('chao', 27, 0, 27, 25, '#');
   ret('chao', 27, 9, 39, 9, '#');
   ret('chao', 27, 17, 39, 17, '#');
   // reunião
   ret('chao', 28, 1, 38, 8, '.');
+  ret('chao', 29, 3, 37, 7, '=');
   g.chao[5][27] = '+';
   ret('obj', 31, 1, 35, 1, 'V');
   ret('obj', 30, 4, 36, 5, 'M');
   ret('obj', 30, 3, 36, 3, 'h');
   ret('obj', 30, 6, 36, 6, 'h');
-  g.obj[1][28] = 'P';
-  g.obj[8][38] = 'P';
-  g.obj[0][37] = 'q';
+  pos([[29, 0], [37, 0]], 'q');
+  pos([[28, 1], [38, 1], [38, 8]], 'P');
+  pos([[38, 4], [38, 5]], 'L');
+  g.obj[2][28] = 'r';
+  g.obj[8][28] = 'v';
   ret('efe', 28, 1, 38, 8, '1');
   // sala do chefe
   ret('chao', 28, 10, 38, 16, 'k');
@@ -361,12 +376,13 @@ function modeloEscritorio() {
   g.obj[12][32] = 'K';
   ret('obj', 36, 10, 38, 10, 'L');
   g.obj[10][29] = 'g';
-  g.obj[9][33] = 'q';
-  g.obj[15][32] = 'n';
-  g.obj[15][34] = 'n';
+  pos([[30, 9], [35, 9]], 'q');
+  pos([[32, 15], [34, 15]], 'n');
   g.obj[15][33] = 't';
-  g.obj[16][38] = 'P';
-  g.obj[16][28] = 'v';
+  pos([[38, 16], [38, 12]], 'P');
+  pos([[28, 16], [28, 10]], 'v');
+  g.obj[14][38] = 'j';
+  g.obj[11][38] = 'c';
   ret('efe', 28, 10, 38, 16, '2');
   // copa
   ret('chao', 28, 18, 38, 24, '_');
@@ -375,12 +391,15 @@ function modeloEscritorio() {
   ret('obj', 30, 18, 32, 18, 'r');
   g.obj[18][33] = 'G';
   g.obj[18][34] = 'F';
+  ret('obj', 35, 18, 37, 18, 'B');
+  ret('obj', 35, 19, 37, 19, 'k');
+  pos([[30, 17], [36, 17]], 'q');
   for (const x of [31, 35]) {
     g.obj[22][x] = 'm';
     g.obj[22][x - 1] = 'h';
     g.obj[22][x + 1] = 'h';
   }
-  g.obj[18][38] = 'P';
+  pos([[38, 18], [28, 24]], 'P');
   g.obj[24][38] = 'v';
   ret('efe', 28, 18, 38, 24, '3');
   ret('efe', 12, 23, 15, 24, 'N');
