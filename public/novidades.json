@@ -1,5 +1,15 @@
 [
   {
+    "versao": "1.0.16",
+    "itens": [
+      "Game House: modelo de mapa novo com 6 escritórios gamer, cozinha, cinema e área comum com sinuca, fliperama e dardos",
+      "Sala principal: o admin escolhe uma sala de voz e quem abre o servidor já cai nela, no saguão",
+      "Área comum igual Discord: fora das salas fechadas todo mundo se ouve; entrou no escritório, só te ouve quem for até lá",
+      "Botão \"Diminuir\" no mapa: ele vira um bloco do tamanho das câmeras, e clicando volta a ficar grande",
+      "Área de construção: crie uma sala \"Do zero\" e já entra nela com o editor aberto; o editor ganhou o botão \"Do zero\""
+    ]
+  },
+  {
     "versao": "1.0.15",
     "itens": [
       "Mapa da chamada: as salas de voz podem ter uma sala em pixel art, onde você anda com seu boneco e ouve mais alto quem está perto",
