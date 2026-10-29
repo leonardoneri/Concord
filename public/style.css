@@ -1553,3 +1553,35 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .estilos-boneco { display: flex; flex-wrap: wrap; gap: 4px; }
 .estilos-boneco .btn-secundario { padding: 4px 10px; font-size: 13px; }
 .estilos-boneco .btn-secundario.ativo { background: var(--acento); color: #fff; }
+
+/* ---------- mapa: editor, sala com mapa e cargo construtor ---------- */
+.srv-novo select, .srv-mapa { padding: 7px 8px; background: #1e1f22; border-radius: 4px; flex: none; max-width: 190px; }
+.srv-cargo .srv-cargo-mapa { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--texto-2); white-space: nowrap; cursor: pointer; }
+.srv-cargo .srv-cargo-mapa input { flex: none; padding: 0; }
+#mapa.editando .barra-mapa #emotes-mapa, #mapa.editando #btn-boneco { display: none; }
+#editor-mapa {
+  position: absolute; top: 8px; left: 8px; bottom: 48px; width: 236px; z-index: 1;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow-y: auto;
+  background: #111214ee; border-radius: 8px; box-shadow: 0 8px 24px #0008;
+}
+#editor-mapa h3 { margin: 0; font-size: 15px; color: var(--forte); }
+.abas-editor { display: flex; gap: 2px; background: #1e1f22; border-radius: 6px; padding: 2px; }
+.abas-editor button { flex: 1; padding: 5px 4px; border-radius: 4px; font-size: 13px; color: var(--texto-2); }
+.abas-editor button:hover { color: var(--forte); }
+.abas-editor button.ativo { background: var(--acento); color: #fff; }
+#paleta-mapa { display: grid; grid-template-columns: repeat(auto-fill, 40px); gap: 4px; }
+.tile-paleta { position: relative; width: 40px; height: 40px; padding: 3px; border-radius: 6px; background: #2b2d31; }
+.tile-paleta canvas { width: 34px; height: 34px; display: block; image-rendering: pixelated; }
+.tile-paleta:hover { background: var(--hover); }
+.tile-paleta.ativo { box-shadow: 0 0 0 2px var(--forte); }
+.letra-paleta { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 700; color: #fff; text-shadow: 0 1px 2px #000; }
+#editor-mapa label { display: grid; gap: 4px; font-size: 12px; color: var(--texto-2); }
+#editor-mapa input { padding: 6px 8px; background: #1e1f22; }
+#dica-editor { margin: 0; font-size: 12px; }
+.tamanho-mapa { display: flex; align-items: end; gap: 6px; }
+.tamanho-mapa label { flex: 1; min-width: 0; }
+.tamanho-mapa input { width: 100%; }
+.tamanho-mapa .btn-secundario, .acoes-editor button { padding: 6px 10px; font-size: 13px; }
+.acoes-editor { display: flex; gap: 6px; margin-top: auto; }
+.acoes-editor .btn-primario { margin-left: auto; }
+.acoes-editor button:disabled { opacity: .5; cursor: default; }

@@ -1,12 +1,26 @@
 // ---------- mapa da chamada: sala em pixel art, cada um com seu boneco, áudio por proximidade ----------
-// Tudo é desenhado aqui mesmo (tiles e bonecos em código), sem imagem de fora.
-// Usa as coisas do app.js: estado, socket, peers, falando, $, el, avisar, renderGrid, atualizarAudios...
+// Cada sala de voz pode ter um mapa (vem do servidor). Tudo é desenhado aqui mesmo (tiles e bonecos em código).
+// Usa as coisas do app.js: estado, socket, peers, falando, foco, $, el, avisar, renderGrid, atualizarAudios...
 
 const T = 16; // pixels de um tile no desenho (a tela amplia 2x a 4x)
-// , grama   * flor     : caminho  T árvore   ~ água    # parede   . madeira  _ azulejo  = tapete  + porta
-// S sofá    V TV       M mesa     h cadeira  P planta  L estante  A fliperama Q sinuca  G geladeira
-// F fogão   B balcão   b banco    o fogueira d puff
-const MAPA = [
+// O mapa tem 3 camadas, uma letra por tile (igual ao servidor):
+//   chao = piso e parede, obj = móveis (' ' = nada), efe = efeitos (X bloqueia, N nasce, P palco, 1-9 área fechada)
+const NOMES_CHAO = { ',': 'Grama', '*': 'Flores', ':': 'Caminho', '~': 'Água', '#': 'Parede', '.': 'Madeira', _: 'Azulejo', '=': 'Tapete', '+': 'Porta' };
+const NOMES_OBJ = {
+  T: 'Árvore', S: 'Sofá', V: 'TV', M: 'Mesa', h: 'Cadeira', P: 'Planta', L: 'Estante', A: 'Fliperama',
+  Q: 'Sinuca', G: 'Geladeira', F: 'Fogão', B: 'Balcão', b: 'Banco', o: 'Fogueira', d: 'Puff',
+};
+const NOMES_EFE = { X: 'Bloqueio', N: 'Nascer', P: 'Palco', ...Object.fromEntries([...'123456789'].map((n) => [n, `Área ${n}`])) };
+const BLOQ_CHAO = new Set('#~');
+const BLOQ_OBJ = new Set('TSVMPLAQGFBbo');
+const PERTO = 2.5; // até aqui (em tiles) ouve com volume cheio
+const LONGE = 7; // daqui pra frente não ouve mais
+const VELOCIDADE = 5; // tiles por segundo
+const EMOTES_MAPA = ['👋', '😂', '❤️', '👍', '🎉'];
+
+// ---------- modelos (o admin escolhe um ao pôr mapa numa sala) ----------
+// A casa: uma letra só por tile; os móveis viram a camada de objetos com o piso do lado embaixo
+const CASA = [
   'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT',
   'T,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,T',
   'T,##########################,,,,,,,,,,*T',
@@ -34,24 +48,68 @@ const MAPA = [
   'T,,,,,,,,,,,,,,,,,,,,,*,,,,,,,,,,,,,,,,T',
   'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT',
 ];
-const MAPA_L = MAPA[0].length;
-const MAPA_A = MAPA.length;
-const BLOQUEIA = new Set('T~#SVMPLAQGFBbo');
-const PISOS = new Set('.,_=*:');
-// áreas fechadas: quem está dentro só ouve (e só é ouvido por) quem está na mesma área
-const ZONAS = [
-  { nome: 'Sala de reunião', x0: 16, y0: 9, x1: 26, y1: 15 },
-  { nome: 'Fogueira', x0: 33, y0: 13, x1: 37, y1: 17 },
-];
-const NASCER = { x: 8.5, y: 18.6 }; // na frente da porta da casa
-const PERTO = 2.5; // até aqui (em tiles) ouve com volume cheio
-const LONGE = 7; // daqui pra frente não ouve mais
-const VELOCIDADE = 5; // tiles por segundo
-const EMOTES_MAPA = ['👋', '😂', '❤️', '👍', '🎉'];
+function modeloCasa() {
+  const a = CASA.length;
+  const l = CASA[0].length;
+  const pisoDe = (x, y) => {
+    if ('Tbo'.includes(CASA[y][x])) return ',';
+    for (const [dx, dy] of [[0, 1], [0, -1], [-1, 0], [1, 0], [1, 1], [-1, -1]]) {
+      const c = CASA[y + dy]?.[x + dx];
+      if (c && '.,_=*:'.includes(c)) return c === '*' ? ',' : c;
+    }
+    return '.';
+  };
+  const chao = [];
+  const obj = [];
+  const efe = [];
+  for (let y = 0; y < a; y++) {
+    let lc = '';
+    let lo = '';
+    let le = '';
+    for (let x = 0; x < l; x++) {
+      const c = CASA[y][x];
+      const movel = c in NOMES_OBJ;
+      lc += movel ? pisoDe(x, y) : c;
+      lo += movel ? c : ' ';
+      if (x >= 16 && x <= 26 && y >= 9 && y <= 15) le += '1'; // sala de reunião
+      else if (x >= 33 && x <= 37 && y >= 13 && y <= 17) le += '2'; // fogueira
+      else if (x >= 7 && x <= 10 && y >= 18 && y <= 19 && !movel) le += 'N'; // na frente da porta
+      else le += ' ';
+    }
+    chao.push(lc);
+    obj.push(lo);
+    efe.push(le);
+  }
+  return { l, a, chao, obj, efe, areas: { 1: 'Sala de reunião', 2: 'Fogueira' } };
+}
+function modeloGramado() {
+  const l = 30;
+  const a = 20;
+  const linhas = (f) => Array.from({ length: a }, (_, y) => Array.from({ length: l }, (_, x) => f(x, y)).join(''));
+  const borda = (x, y) => x === 0 || y === 0 || x === l - 1 || y === a - 1;
+  const meio = (x, y) => Math.abs(x - l / 2) < 2 && Math.abs(y - a / 2) < 2;
+  return {
+    l, a,
+    chao: linhas(() => ','),
+    obj: linhas((x, y) => (borda(x, y) ? 'T' : ' ')),
+    efe: linhas((x, y) => (meio(x, y) ? 'N' : ' ')),
+    areas: {},
+  };
+}
+const MODELOS_MAPA = { casa: { nome: 'Casa', criar: modeloCasa }, gramado: { nome: 'Gramado vazio', criar: modeloGramado } };
 
-const tileEm = (x, y) => MAPA[y]?.[x] ?? 'T';
-const livreTile = (x, y) => !BLOQUEIA.has(tileEm(x, y));
-const zonaEm = (p) => ZONAS.find((z) => p.x >= z.x0 && p.x < z.x1 + 1 && p.y >= z.y0 && p.y < z.y1 + 1) ?? null;
+// ---------- o mapa aberto ----------
+let atual = null; // o mapa que está na tela (o da sala, ou o rascunho do editor)
+const dentro = (m, x, y) => x >= 0 && y >= 0 && x < m.l && y < m.a;
+const chaoEm = (m, x, y) => (dentro(m, x, y) ? m.chao[y][x] : ',');
+const objEm = (m, x, y) => (dentro(m, x, y) ? m.obj[y][x] : ' ');
+const efeEm = (m, x, y) => (dentro(m, x, y) ? m.efe[y][x] : ' ');
+const livreTile = (x, y) => !!atual && dentro(atual, x, y) && efeEm(atual, x, y) !== 'X'
+  && !BLOQ_CHAO.has(chaoEm(atual, x, y)) && !BLOQ_OBJ.has(objEm(atual, x, y));
+const efeitoNoPe = (p) => (atual ? efeEm(atual, Math.floor(p.x), Math.floor(p.y - 0.1)) : ' ');
+// área fechada em que a pessoa está ('1' a '9'), ou null
+const areaEm = (p) => (/[1-9]/.test(efeitoNoPe(p)) ? efeitoNoPe(p) : null);
+const nomeArea = (id) => atual?.areas?.[id] || `Área ${id}`;
 
 // número "aleatório" fixo por tile (o desenho não muda a cada vez que abre)
 function rnd(x, y, i = 0) {
@@ -61,48 +119,19 @@ function rnd(x, y, i = 0) {
 }
 
 // ---------- tiles ----------
-function pisoDe(tx, ty) {
-  for (const [dx, dy] of [[0, 1], [0, -1], [-1, 0], [1, 0], [1, 1], [-1, -1]]) {
-    const c = tileEm(tx + dx, ty + dy);
-    if (PISOS.has(c)) return c === '*' ? ',' : c;
-  }
-  return '.';
-}
-
-function pintarTile(c, ch, tx, ty) {
+function pintarChao(c, m, ch, tx, ty) {
   const X = tx * T;
   const Y = ty * T;
   const p = (cor, x, y, w = 1, h = 1) => { c.fillStyle = cor; c.fillRect(X + x, Y + y, w, h); };
-  const viz = (dx, dy) => tileEm(tx + dx, ty + dy);
+  const viz = (dx, dy) => chaoEm(m, tx + dx, ty + dy);
   const r = (i) => rnd(tx, ty, i);
-  const piso = () => pintarTile(c, pisoDe(tx, ty), tx, ty);
   switch (ch) {
     case ',':
-    case 'T':
-    case 'b':
-    case 'o':
       p('#5d9e4b', 0, 0, 16, 16);
       for (let i = 0; i < 7; i++) p(r(i) > 0.5 ? '#4e8a3f' : '#6fb35a', (r(i + 10) * 15) | 0, (r(i + 20) * 14) | 0, 1, 2);
-      if (ch === 'T') {
-        p('rgba(0,0,0,.22)', 2, 10, 12, 5);
-        p('#6b4423', 6, 7, 4, 8);
-        p('#8a5a32', 6, 7, 1, 8);
-      } else if (ch === 'b') {
-        p('#5e3c20', 2, 11, 2, 4);
-        p('#5e3c20', 12, 11, 2, 4);
-        p('#8a5a32', 1, 5, 14, 3);
-        p('#a06a3c', 1, 5, 14, 1);
-        p('#8a5a32', 1, 9, 14, 3);
-        p('#a06a3c', 1, 9, 14, 1);
-      } else if (ch === 'o') {
-        p('#7d7d86', 2, 9, 12, 5);
-        p('#9a9aa4', 3, 9, 10, 1);
-        p('#4a3020', 3, 10, 10, 3);
-        p('#6b4423', 4, 10, 8, 2);
-      }
       break;
     case '*':
-      pintarTile(c, ',', tx, ty);
+      pintarChao(c, m, ',', tx, ty);
       for (let i = 0; i < 3; i++) {
         const cor = ['#f4f1e8', '#f2d04a', '#e87aa8', '#8fb8f0'][(r(i + 30) * 4) | 0];
         const fx = 2 + ((r(i + 40) * 11) | 0);
@@ -154,9 +183,8 @@ function pintarTile(c, ch, tx, ty) {
       if (viz(-1, 0) !== '=') p('#e0b860', 1, 0, 1, 16);
       if (viz(1, 0) !== '=') p('#e0b860', 14, 0, 1, 16);
       break;
-    case '#': {
-      const frente = !['#'].includes(viz(0, 1));
-      if (frente) {
+    case '#':
+      if (viz(0, 1) !== '#') { // parede vista de frente
         p('#5b4a3e', 0, 0, 16, 5);
         p('#d9c4a6', 0, 5, 16, 9);
         for (let x = 3; x < 16; x += 4) p('#cdb795', x, 5, 1, 9);
@@ -169,9 +197,38 @@ function pintarTile(c, ch, tx, ty) {
         if (viz(0, -1) !== '#') p('#7a6656', 0, 0, 16, 2);
       }
       break;
-    }
-    case 'S': {
-      piso();
+    default:
+      p('#000', 0, 0, 16, 16);
+  }
+}
+
+function pintarObj(c, m, ch, tx, ty) {
+  const X = tx * T;
+  const Y = ty * T;
+  const p = (cor, x, y, w = 1, h = 1) => { c.fillStyle = cor; c.fillRect(X + x, Y + y, w, h); };
+  const viz = (dx, dy) => objEm(m, tx + dx, ty + dy);
+  const r = (i) => rnd(tx, ty, i);
+  switch (ch) {
+    case 'T':
+      p('rgba(0,0,0,.22)', 2, 10, 12, 5);
+      p('#6b4423', 6, 7, 4, 8);
+      p('#8a5a32', 6, 7, 1, 8);
+      break;
+    case 'b':
+      p('#5e3c20', 2, 11, 2, 4);
+      p('#5e3c20', 12, 11, 2, 4);
+      p('#8a5a32', 1, 5, 14, 3);
+      p('#a06a3c', 1, 5, 14, 1);
+      p('#8a5a32', 1, 9, 14, 3);
+      p('#a06a3c', 1, 9, 14, 1);
+      break;
+    case 'o':
+      p('#7d7d86', 2, 9, 12, 5);
+      p('#9a9aa4', 3, 9, 10, 1);
+      p('#4a3020', 3, 10, 10, 3);
+      p('#6b4423', 4, 10, 8, 2);
+      break;
+    case 'S':
       p('rgba(0,0,0,.2)', 0, 13, 16, 2);
       p('#3e5c9e', 0, 1, 16, 6);
       p('#4f70b8', 0, 6, 16, 7);
@@ -180,9 +237,7 @@ function pintarTile(c, ch, tx, ty) {
       if (viz(-1, 0) !== 'S') p('#344f88', 0, 2, 3, 11);
       if (viz(1, 0) !== 'S') p('#344f88', 13, 2, 3, 11);
       break;
-    }
     case 'V': {
-      piso();
       const l = viz(-1, 0) !== 'V' ? 1 : 0;
       const d = viz(1, 0) !== 'V' ? 15 : 16;
       p('#5a3e2a', l, 10, d - l, 5);
@@ -191,8 +246,7 @@ function pintarTile(c, ch, tx, ty) {
       p('#1f2c4a', l + (l ? 1 : 0), 2, d - l - (l ? 1 : 0) - (d === 15 ? 1 : 0), 7);
       break;
     }
-    case 'M': {
-      piso();
+    case 'M':
       p('#a8703f', 0, 0, 16, 16);
       p('#bf8550', 0, 1, 16, 1);
       if (viz(0, -1) !== 'M') p('#7a4c28', 0, 0, 16, 2);
@@ -200,9 +254,7 @@ function pintarTile(c, ch, tx, ty) {
       if (viz(1, 0) !== 'M') p('#7a4c28', 14, 0, 2, 16);
       if (viz(0, 1) !== 'M') p('#6a3e1e', 0, 12, 16, 4);
       break;
-    }
-    case 'h': {
-      piso();
+    case 'h':
       p('rgba(0,0,0,.18)', 4, 12, 8, 2);
       p('#7a4a2a', 4, 4, 8, 8);
       p('#93603a', 5, 5, 6, 6);
@@ -211,9 +263,7 @@ function pintarTile(c, ch, tx, ty) {
       else if (viz(1, 0) === 'M') p('#5e3820', 2, 4, 3, 8);
       else p('#5e3820', 11, 4, 3, 8);
       break;
-    }
     case 'P':
-      piso();
       p('rgba(0,0,0,.2)', 4, 13, 8, 2);
       p('#b0603a', 5, 10, 6, 5);
       p('#c87444', 5, 10, 6, 1);
@@ -223,7 +273,6 @@ function pintarTile(c, ch, tx, ty) {
       p('#56b05c', 9, 5, 2, 2);
       break;
     case 'L': {
-      piso();
       p('#4e301b', 1, 0, 14, 15);
       p('#6a4428', 2, 1, 12, 13);
       const livros = ['#c84a4a', '#4a7ac8', '#d8b84a', '#4ab07a', '#9a5ad0', '#e8e0d0'];
@@ -240,7 +289,6 @@ function pintarTile(c, ch, tx, ty) {
       break;
     }
     case 'A':
-      piso();
       p('rgba(0,0,0,.25)', 2, 13, 12, 2);
       p('#2f2458', 2, 1, 12, 14);
       p('#4a3a8a', 3, 1, 10, 2);
@@ -251,7 +299,6 @@ function pintarTile(c, ch, tx, ty) {
       p('#1b1b24', 7, 9, 1, 2);
       break;
     case 'Q': {
-      piso();
       p('#2f8f50', 0, 0, 16, 16);
       p('#38a05c', 3, 3, 10, 10);
       const cima = viz(0, -1) !== 'Q';
@@ -273,7 +320,6 @@ function pintarTile(c, ch, tx, ty) {
       break;
     }
     case 'G':
-      piso();
       p('#9aa4aa', 2, 0, 12, 16);
       p('#dfe6ea', 3, 0, 10, 15);
       p('#b8c2c8', 3, 6, 10, 1);
@@ -281,7 +327,6 @@ function pintarTile(c, ch, tx, ty) {
       p('#8a949a', 11, 8, 1, 4);
       break;
     case 'F':
-      piso();
       p('#6a6f78', 0, 0, 16, 15);
       p('#8a8f98', 1, 1, 14, 12);
       for (const [x, y] of [[3, 2], [9, 2], [3, 8], [9, 8]]) {
@@ -290,7 +335,6 @@ function pintarTile(c, ch, tx, ty) {
       }
       break;
     case 'B':
-      piso();
       p('#d8c8ae', 0, 0, 16, 10);
       p('#e8dcc6', 0, 0, 16, 1);
       p('#9a8466', 0, 10, 16, 5);
@@ -302,14 +346,11 @@ function pintarTile(c, ch, tx, ty) {
       }
       break;
     case 'd':
-      piso();
       p('rgba(0,0,0,.2)', 2, 12, 12, 3);
       p('#b07a28', 2, 5, 12, 9);
       p('#d89a3a', 2, 4, 12, 8);
       p('#e8b45a', 4, 5, 6, 3);
       break;
-    default:
-      p('#000', 0, 0, 16, 16);
   }
 }
 
@@ -332,40 +373,50 @@ function pintarCopa(c, tx, ty) {
   c.fillRect(cx - 5, cy + 5, 10, 2);
 }
 
-let mapaBase = null;
+let mapaBase = null; // desenho pronto do mapa (refeito quando o mapa muda)
 let mapaTopo = null;
-const animados = []; // tiles que mexem: água, fogueira, fliperama
+let animados = []; // tiles que mexem: água, fogueira, fliperama
+let caixasAreas = {}; // área -> { x0, y0, x1, y1 } (pra escrever o nome)
 function prepararMapa() {
-  if (mapaBase) return;
+  if (mapaBase || !atual) return;
+  const m = atual;
   mapaBase = document.createElement('canvas');
-  mapaBase.width = MAPA_L * T;
-  mapaBase.height = MAPA_A * T;
+  mapaBase.width = m.l * T;
+  mapaBase.height = m.a * T;
   mapaTopo = document.createElement('canvas');
   mapaTopo.width = mapaBase.width;
   mapaTopo.height = mapaBase.height;
   const b = mapaBase.getContext('2d');
   const t = mapaTopo.getContext('2d');
-  for (let y = 0; y < MAPA_A; y++) {
-    for (let x = 0; x < MAPA_L; x++) {
-      const ch = MAPA[y][x];
-      pintarTile(b, ch, x, y);
-      if (ch === 'T') pintarCopa(t, x, y);
-      if ('~oA'.includes(ch)) animados.push({ ch, x, y });
+  animados = [];
+  caixasAreas = {};
+  for (let y = 0; y < m.a; y++) {
+    for (let x = 0; x < m.l; x++) {
+      const ch = m.chao[y][x];
+      const o = m.obj[y][x];
+      const e = m.efe[y][x];
+      pintarChao(b, m, ch, x, y);
+      if (o !== ' ') pintarObj(b, m, o, x, y);
+      if (o === 'T') pintarCopa(t, x, y);
+      if (ch === '~') animados.push({ ch, x, y });
+      if (o === 'o' || o === 'A') animados.push({ ch: o, x, y });
+      if (/[1-9]/.test(e)) {
+        const cx = caixasAreas[e] ??= { x0: x, y0: y, x1: x, y1: y };
+        Object.assign(cx, { x0: Math.min(cx.x0, x), y0: Math.min(cx.y0, y), x1: Math.max(cx.x1, x), y1: Math.max(cx.y1, y) });
+        b.fillStyle = 'rgba(255,255,255,.05)';
+        b.fillRect(x * T, y * T, T, T);
+      }
     }
-  }
-  // nome das áreas fechadas escrito no chão
-  for (const z of ZONAS) {
-    b.fillStyle = 'rgba(255,255,255,.05)';
-    b.fillRect(z.x0 * T, z.y0 * T, (z.x1 - z.x0 + 1) * T, (z.y1 - z.y0 + 1) * T);
   }
 }
 
 function pintarAnimados(c, t) {
+  const m = atual;
   for (const { ch, x, y } of animados) {
     const X = x * T;
     const Y = y * T;
     if (ch === '~') {
-      if (tileEm(x, y - 1) !== '~' || tileEm(x, y + 1) !== '~' || tileEm(x - 1, y) !== '~' || tileEm(x + 1, y) !== '~') continue;
+      if ([[0, -1], [0, 1], [-1, 0], [1, 0]].some(([dx, dy]) => chaoEm(m, x + dx, y + dy) !== '~')) continue;
       c.fillStyle = '#7ab8ea';
       for (let i = 0; i < 2; i++) {
         const fase = (t * 0.6 + rnd(x, y, i)) % 1;
@@ -524,12 +575,12 @@ function sprite(b, dir, quadro) {
   return final;
 }
 
-// ---------- estado do mapa ----------
+// ---------- quem está no mapa ----------
 // id -> { x, y (o que aparece), alvoX, alvoY (o último que chegou), dir, anda, boneco, emote }
 const pessoasMapa = new Map();
 const mapa = {
-  rodando: false, ultimo: 0, teclas: new Set(), caminho: null, destino: null,
-  enviado: null, enviadoEm: 0, fatores: new Map(), pertoChave: '', escala: 3, travado: 0,
+  rodando: false, ultimo: 0, teclas: new Set(), caminho: null, destino: null, chave: '',
+  enviado: null, enviadoEm: 0, fatores: new Map(), pertoChave: '', escala: 3, travado: 0, cam: null,
 };
 const naChamadaMapa = (id) => estado.usuarios.some((u) => u.id === id && u.voz === estado.voz);
 
@@ -539,8 +590,9 @@ function fatorMapa(id) {
   const eu = pessoasMapa.get(estado.eu.id);
   const o = pessoasMapa.get(id);
   if (!eu || !o) return 1; // ainda não entrou no mapa (ou app antigo): ouve normal
-  const za = zonaEm(eu);
-  const zb = zonaEm(o);
+  if (efeitoNoPe(o) === 'P') return 1; // no palco: a sala inteira ouve
+  const za = areaEm(eu);
+  const zb = areaEm(o);
   if (za || zb) return za === zb ? 1 : 0;
   const d = Math.hypot(eu.x - o.x, eu.y - o.y);
   if (d <= PERTO) return 1;
@@ -572,21 +624,33 @@ function verificarProximidade() {
   }
 }
 
-function lugarParaNascer() {
-  for (let tent = 0; tent < 30; tent++) {
-    const x = NASCER.x + (Math.random() - 0.5) * 4;
-    const y = NASCER.y + (Math.random() - 0.5) * 2;
-    if (livre(x, y)) return { x, y };
-  }
-  return { ...NASCER };
-}
-
 // o pé do boneco cabe ali?
 function livre(x, y) {
   for (const [dx, dy] of [[-0.28, -0.25], [0.28, -0.25], [-0.28, -0.02], [0.28, -0.02]]) {
     if (!livreTile(Math.floor(x + dx), Math.floor(y + dy))) return false;
   }
   return true;
+}
+
+// nasce num tile de "nascer"; sem nenhum, no primeiro lugar livre a partir do meio
+function lugarParaNascer() {
+  const m = atual;
+  const pontos = [];
+  for (let y = 0; y < m.a; y++) for (let x = 0; x < m.l; x++) if (m.efe[y][x] === 'N' && livreTile(x, y)) pontos.push({ x, y });
+  if (pontos.length) {
+    const p = pontos[Math.floor(Math.random() * pontos.length)];
+    return { x: p.x + 0.5, y: p.y + 0.65 };
+  }
+  for (let r = 0; r < Math.max(m.l, m.a); r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const x = Math.floor(m.l / 2) + dx;
+        const y = Math.floor(m.a / 2) + dy;
+        if (livreTile(x, y)) return { x: x + 0.5, y: y + 0.65 };
+      }
+    }
+  }
+  return { x: m.l / 2, y: m.a / 2 };
 }
 
 function enviarPosicao(forcar = false) {
@@ -606,14 +670,28 @@ function aplicarMapa(dados) {
   if (!estado.mapa) {
     pessoasMapa.clear();
     mapa.fatores.clear();
-    mapa.pertoChave = '';
-    mapa.caminho = null;
+    Object.assign(mapa, { pertoChave: '', caminho: null, destino: null, chave: '' });
+    if (editor) fecharEditor();
+    atual = null;
+    mapaBase = null;
     if (antes) foco = null;
     $('#painel-boneco').hidden = true;
     renderGrid();
     return;
   }
   if (!antes) foco = null;
+  // o desenho mudou (alguém salvou o editor): refaz, a não ser que eu esteja editando o meu rascunho
+  const chave = JSON.stringify(dados.mapa);
+  if (chave !== mapa.chave) {
+    mapa.chave = chave;
+    if (editor?.salvando) fecharEditor();
+    if (!editor) {
+      atual = dados.mapa;
+      mapaBase = null;
+    } else {
+      avisar('Alguém salvou o mapa enquanto você editava. Se salvar, o seu substitui o dele.', 6000);
+    }
+  }
   const vistos = new Set();
   for (const p of dados.pessoas) {
     vistos.add(p.id);
@@ -628,17 +706,24 @@ function aplicarMapa(dados) {
     v.boneco = eu ? meuBonecoAgora() : bonecoValido(p.boneco) ? p.boneco : v.boneco;
   }
   for (const id of [...pessoasMapa.keys()]) if (!vistos.has(id) && id !== estado.eu.id) pessoasMapa.delete(id);
-  // eu ainda não estou no mapa (ou o servidor me esqueceu): entro / mando de novo onde estou
+  // eu ainda não estou no mapa, ou o lugar onde eu estava virou parede: nasço de novo
   let eu = pessoasMapa.get(estado.eu.id);
+  if (eu && !editor && !livre(eu.x, eu.y)) {
+    pessoasMapa.delete(estado.eu.id);
+    eu = null;
+  }
   if (!eu) {
     const pos = lugarParaNascer();
     eu = { ...pos, alvoX: pos.x, alvoY: pos.y, dir: 'baixo', anda: false, boneco: meuBonecoAgora(), emote: null };
     pessoasMapa.set(estado.eu.id, eu);
+    mapa.caminho = mapa.destino = null;
   }
-  if (!vistos.has(estado.eu.id)) {
+  // o servidor ainda não sabe de mim (entrei agora, reconectei ou o mapa mudou): mando onde estou
+  if (!vistos.has(estado.eu.id) || !livre(eu.x, eu.y)) {
     socket.emit('mapa:boneco', meuBonecoAgora());
     enviarPosicao(true);
   }
+  $('#btn-editar-mapa').hidden = !dados.podeEditar || !!editor;
   iniciarLoopMapa();
   renderGrid();
   verificarProximidade();
@@ -670,13 +755,9 @@ socket.on('mapa:emote', ({ id, emoji }) => {
   if (v) v.emote = { emoji, em: performance.now() };
 });
 
-// a conexão voltou no meio da chamada: o servidor pode ter esquecido o mapa (reiniciou)
+// a conexão voltou no meio da chamada: pega o mapa de novo (e o servidor fica sabendo onde estou)
 function restaurarMapa() {
-  const tinha = !!estado.mapa;
-  socket.emit('mapa:estado', null, (dados) => {
-    if (dados || !tinha) return aplicarMapa(dados);
-    socket.emit('mapa:ligar', null, () => {});
-  });
+  socket.emit('mapa:estado', null, aplicarMapa);
 }
 
 // ---------- andar ----------
@@ -686,8 +767,13 @@ const TECLAS_MAPA = {
 };
 const mapaVisivel = () => !!estado.mapa && estado.view === 'voz' && $('#grid').classList.contains('mapa');
 window.addEventListener('keydown', (e) => {
-  if (!mapaVisivel() || emCampoDeTexto(e) || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (!mapaVisivel() || emCampoDeTexto(e) || e.altKey || e.metaKey) return;
   if ($('.modal:not([hidden])')) return;
+  if (editor && e.ctrlKey && e.code === 'KeyZ') {
+    e.preventDefault();
+    return desfazerEditor();
+  }
+  if (e.ctrlKey) return;
   const dir = TECLAS_MAPA[e.code];
   if (dir) {
     e.preventDefault();
@@ -696,7 +782,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   const n = /^Digit([1-5])$/.exec(e.code)?.[1];
-  if (n && !e.repeat) mandarEmote(EMOTES_MAPA[n - 1]);
+  if (n && !e.repeat && !editor) mandarEmote(EMOTES_MAPA[n - 1]);
 });
 window.addEventListener('keyup', (e) => {
   const dir = TECLAS_MAPA[e.code];
@@ -710,7 +796,7 @@ function mandarEmote(emoji) {
 
 // caminho mais curto até o tile clicado (se for móvel/parede, para do lado)
 function caminhoAte(de, alvo) {
-  const k = (x, y) => y * MAPA_L + x;
+  const k = (x, y) => y * atual.l + x;
   const veio = new Map([[k(de.x, de.y), null]]);
   const fila = [de];
   const alvoLivre = livreTile(alvo.x, alvo.y);
@@ -737,8 +823,15 @@ function andar(dt) {
   if (!eu) return;
   let vx = (mapa.teclas.has('dir') ? 1 : 0) - (mapa.teclas.has('esq') ? 1 : 0);
   let vy = (mapa.teclas.has('baixo') ? 1 : 0) - (mapa.teclas.has('cima') ? 1 : 0);
+  if (editor) {
+    // editando: as teclas mexem a câmera, o boneco fica parado
+    const v = 320 * Math.min(dt, 0.05);
+    editor.cam.x += vx * v;
+    editor.cam.y += vy * v;
+    vx = vy = 0;
+  }
   let falta = Infinity; // indo pelo clique: não passa do ponto
-  if (!vx && !vy && mapa.caminho?.length) {
+  if (!vx && !vy && mapa.caminho?.length && !editor) {
     const alvo = mapa.caminho[0];
     const dx = alvo.x + 0.5 - eu.x;
     const dy = alvo.y + 0.65 - eu.y;
@@ -781,7 +874,6 @@ function iniciarLoopMapa() {
   if (mapa.rodando) return;
   mapa.rodando = true;
   mapa.ultimo = performance.now();
-  prepararMapa();
   requestAnimationFrame(quadroMapa);
 }
 
@@ -792,6 +884,7 @@ function quadroMapa(agora) {
   }
   const dt = (agora - mapa.ultimo) / 1000;
   mapa.ultimo = agora;
+  prepararMapa();
   andar(dt);
   for (const [id, v] of pessoasMapa) {
     if (id === estado.eu.id) continue;
@@ -811,30 +904,42 @@ function quadroMapa(agora) {
 }
 
 function camera(cv) {
-  const eu = pessoasMapa.get(estado.eu.id);
   const s = mapa.escala;
   const vw = cv.clientWidth / s;
   const vh = cv.clientHeight / s;
-  const larg = MAPA_L * T;
-  const alt = MAPA_A * T;
+  const larg = atual.l * T;
+  const alt = atual.a * T;
   const centro = (pos, v, total) => (total <= v ? (total - v) / 2 : Math.min(Math.max(pos - v / 2, 0), total - v));
-  return {
-    x: Math.round(centro((eu?.x ?? NASCER.x) * T, vw, larg) * s) / s,
-    y: Math.round(centro((eu?.y ?? NASCER.y) * T - 8, vh, alt) * s) / s,
-  };
+  let px;
+  let py;
+  if (editor) {
+    // câmera livre do editor (presa pra não sumir do mapa)
+    editor.cam.x = Math.min(Math.max(editor.cam.x, 0), larg);
+    editor.cam.y = Math.min(Math.max(editor.cam.y, 0), alt);
+    px = editor.cam.x;
+    py = editor.cam.y;
+  } else {
+    const eu = pessoasMapa.get(estado.eu.id);
+    px = (eu?.x ?? atual.l / 2) * T;
+    py = (eu?.y ?? atual.a / 2) * T - 8;
+  }
+  return { x: Math.round(centro(px, vw, larg) * s) / s, y: Math.round(centro(py, vh, alt) * s) / s };
 }
+
+const CORES_EFE = { X: 'rgba(230,60,60,.45)', N: 'rgba(60,210,100,.45)', P: 'rgba(250,200,40,.5)' };
+const corArea = (id) => `hsla(${(Number(id) * 67) % 360} 80% 60% / .35)`;
 
 function desenharMapa(t) {
   const cv = $('#tela-mapa');
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth;
   const h = cv.clientHeight;
-  if (!w || !h) return;
+  if (!w || !h || !mapaBase) return;
   if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
     cv.width = Math.round(w * dpr);
     cv.height = Math.round(h * dpr);
   }
-  mapa.escala = Math.max(2, Math.min(4, Math.round(Math.min(h / (T * 11), w / (T * 16)))));
+  mapa.escala = editor ? editor.zoom : Math.max(2, Math.min(4, Math.round(Math.min(h / (T * 11), w / (T * 16)))));
   const s = mapa.escala;
   const c = cv.getContext('2d');
   c.imageSmoothingEnabled = false;
@@ -844,35 +949,34 @@ function desenharMapa(t) {
   const cam = camera(cv);
   mapa.cam = cam;
   const mundo = () => c.setTransform(s * dpr, 0, 0, s * dpr, -cam.x * s * dpr, -cam.y * s * dpr);
+  const tela = (wx, wy) => ({ x: (wx - cam.x) * s, y: (wy - cam.y) * s });
   mundo();
   c.drawImage(mapaBase, 0, 0);
   pintarAnimados(c, t);
 
   const eu = pessoasMapa.get(estado.eu.id);
-  const minhaZona = eu && zonaEm(eu);
-  if (minhaZona) {
-    const z = minhaZona;
-    c.fillStyle = 'rgba(255,225,140,.10)';
-    c.fillRect(z.x0 * T, z.y0 * T, (z.x1 - z.x0 + 1) * T, (z.y1 - z.y0 + 1) * T);
-    c.strokeStyle = 'rgba(255,225,140,.6)';
-    c.lineWidth = 1;
-    c.setLineDash([3, 2]);
-    c.strokeRect(z.x0 * T + 0.5, z.y0 * T + 0.5, (z.x1 - z.x0 + 1) * T - 1, (z.y1 - z.y0 + 1) * T - 1);
-    c.setLineDash([]);
+  const minhaArea = eu && !editor && areaEm(eu);
+  if (minhaArea) {
+    for (let y = 0; y < atual.a; y++) {
+      for (let x = 0; x < atual.l; x++) {
+        if (atual.efe[y][x] !== minhaArea) continue;
+        c.fillStyle = 'rgba(255,225,140,.10)';
+        c.fillRect(x * T, y * T, T, T);
+      }
+    }
   }
   // nome das áreas fechadas: embaixo dos bonecos (texto na resolução da tela, pra ficar nítido)
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const tela = (wx, wy) => ({ x: (wx - cam.x) * s, y: (wy - cam.y) * s });
   c.textAlign = 'center';
   c.textBaseline = 'middle';
   c.font = '600 11px "gg sans", "Segoe UI", system-ui, sans-serif';
   c.fillStyle = 'rgba(255,240,200,.5)';
-  for (const z of ZONAS) {
+  for (const [id, z] of Object.entries(caixasAreas)) {
     const p = tela((z.x0 + (z.x1 - z.x0 + 1) / 2) * T, (z.y1 + 1) * T - 5);
-    c.fillText(`🔒 ${z.nome}`, p.x, p.y);
+    c.fillText(`🔒 ${nomeArea(id)}`, p.x, p.y);
   }
   mundo();
-  if (mapa.destino) {
+  if (mapa.destino && !editor) {
     c.strokeStyle = 'rgba(255,255,255,.7)';
     c.strokeRect(mapa.destino.x * T + 2.5, mapa.destino.y * T + 2.5, T - 5, T - 5);
   }
@@ -882,11 +986,10 @@ function desenharMapa(t) {
   for (const [id, v] of lista) {
     const px = Math.round(v.x * T);
     const py = Math.round(v.y * T);
-    const fala = falando.has(id);
     c.fillStyle = 'rgba(0,0,0,.28)';
     c.fillRect(px - 5, py - 1, 10, 2);
     c.fillRect(px - 4, py - 2, 8, 4);
-    if (fala) {
+    if (falando.has(id)) {
       c.fillStyle = 'rgba(35,165,90,.55)';
       c.fillRect(px - 7, py - 2, 14, 1);
       c.fillRect(px - 7, py + 2, 14, 1);
@@ -899,23 +1002,26 @@ function desenharMapa(t) {
     c.drawImage(sprite(b, v.dir, quadro), px - 7, py - 19 - (andando && quadro ? 1 : 0));
   }
   c.drawImage(mapaTopo, 0, 0);
+  if (editor) desenharEditor(c, mundo, tela, dpr);
 
   // nomes e emojis por cima de tudo
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
   for (const [id, v] of lista) {
     const u = estado.usuarios.find((x) => x.id === id) ?? (id === estado.eu.id ? estado.eu : null);
     if (!u) continue;
     const p = tela(v.x * T, v.y * T - 23);
-    const fala = falando.has(id);
     const mudo = id === estado.eu.id ? estado.mudo || estado.surdo : u.mudo || u.surdo;
-    const nome = u.nome + (mudo ? ' 🔇' : '');
+    const palco = efeitoNoPe(v) === 'P';
+    const nome = (palco ? '🎤 ' : '') + u.nome + (mudo ? ' 🔇' : '');
     c.font = '600 12px "gg sans", "Segoe UI", system-ui, sans-serif';
     const lw = c.measureText(nome).width + 10;
     c.fillStyle = 'rgba(0,0,0,.62)';
     c.beginPath();
     c.roundRect(p.x - lw / 2, p.y - 9, lw, 18, 5);
     c.fill();
-    if (fala) {
+    if (falando.has(id)) {
       c.strokeStyle = '#23a55a';
       c.lineWidth = 2;
       c.stroke();
@@ -935,22 +1041,269 @@ function desenharMapa(t) {
     }
   }
   const aviso = $('#zona-mapa');
-  aviso.hidden = !minhaZona;
-  if (minhaZona) aviso.textContent = `🔒 ${minhaZona.nome}: só quem está aqui dentro ouve vocês`;
+  const noPalco = eu && !editor && efeitoNoPe(eu) === 'P';
+  aviso.hidden = !minhaArea && !noPalco;
+  if (noPalco) aviso.textContent = '🎤 No palco: a sala inteira está te ouvindo';
+  else if (minhaArea) aviso.textContent = `🔒 ${nomeArea(minhaArea)}: só quem está aqui dentro ouve vocês`;
 }
 
-// clique no mapa: anda até lá
+// tile do mapa embaixo do mouse
+function tileDoMouse(e) {
+  const r = $('#tela-mapa').getBoundingClientRect();
+  return {
+    x: Math.floor(((e.clientX - r.left) / mapa.escala + mapa.cam.x) / T),
+    y: Math.floor(((e.clientY - r.top) / mapa.escala + mapa.cam.y) / T),
+  };
+}
+
+// clique no mapa: anda até lá (no editor, pinta)
 $('#tela-mapa').addEventListener('mousedown', (e) => {
+  if (!atual || !mapa.cam) return;
+  if (editor) return comecarPintura(e);
   const eu = pessoasMapa.get(estado.eu?.id);
-  if (!eu || !mapa.cam || e.button !== 0) return;
-  const r = e.currentTarget.getBoundingClientRect();
-  const tx = Math.floor(((e.clientX - r.left) / mapa.escala + mapa.cam.x) / T);
-  const ty = Math.floor(((e.clientY - r.top) / mapa.escala + mapa.cam.y) / T);
-  if (tx < 0 || ty < 0 || tx >= MAPA_L || ty >= MAPA_A) return;
-  const c = caminhoAte({ x: Math.floor(eu.x), y: Math.floor(eu.y - 0.1) }, { x: tx, y: ty });
+  if (!eu || e.button !== 0) return;
+  const alvo = tileDoMouse(e);
+  if (!dentro(atual, alvo.x, alvo.y)) return;
+  const c = caminhoAte({ x: Math.floor(eu.x), y: Math.floor(eu.y - 0.1) }, alvo);
   mapa.caminho = c;
   mapa.destino = c?.length ? c.at(-1) : null;
 });
+$('#tela-mapa').addEventListener('contextmenu', (e) => editor && e.preventDefault());
+
+// ---------- editor (admin ou cargo construtor) ----------
+// editor = { mapa (rascunho), camada, pincel, ferramenta, historico, cam, zoom, pintando, ini, fim, salvando }
+let editor = null;
+const VAZIO = { chao: ',', obj: ' ', efe: ' ' };
+const copiaMapa = (m) => ({ ...m, chao: [...m.chao], obj: [...m.obj], efe: [...m.efe], areas: { ...m.areas } });
+
+function abrirEditor() {
+  if (!atual || editor) return;
+  const eu = pessoasMapa.get(estado.eu.id);
+  editor = {
+    mapa: copiaMapa(atual), camada: 'chao', pincel: '#', ferramenta: 'pincel', historico: [],
+    cam: { x: (eu?.x ?? atual.l / 2) * T, y: (eu?.y ?? atual.a / 2) * T }, zoom: 2,
+  };
+  atual = editor.mapa;
+  mapaBase = null;
+  mapa.caminho = mapa.destino = null;
+  $('#editor-mapa').hidden = false;
+  $('#btn-editar-mapa').hidden = true;
+  $('#mapa').classList.add('editando');
+  renderEditor();
+  $('#tela-mapa').focus();
+}
+
+function fecharEditor() {
+  editor = null;
+  atual = estado.mapa?.mapa ?? null;
+  mapaBase = null;
+  $('#editor-mapa').hidden = true;
+  $('#mapa').classList.remove('editando');
+  $('#btn-editar-mapa').hidden = !estado.mapa?.podeEditar;
+}
+
+function trocarTile(camada, x, y, letra) {
+  const m = editor.mapa;
+  if (!dentro(m, x, y) || m[camada][y][x] === letra) return false;
+  const linha = m[camada][y];
+  m[camada][y] = linha.slice(0, x) + letra + linha.slice(x + 1);
+  return true;
+}
+function guardarDesfazer() {
+  const m = editor.mapa;
+  editor.historico.push({ l: m.l, a: m.a, chao: [...m.chao], obj: [...m.obj], efe: [...m.efe], areas: { ...m.areas } });
+  if (editor.historico.length > 50) editor.historico.shift();
+}
+function desfazerEditor() {
+  const h = editor?.historico.pop();
+  if (!h) return;
+  Object.assign(editor.mapa, h);
+  mapaBase = null;
+  renderEditor();
+}
+
+// botão esquerdo pinta, direito apaga; no retângulo, arrasta e solta
+function comecarPintura(e) {
+  if (e.button !== 0 && e.button !== 2) return;
+  e.preventDefault();
+  guardarDesfazer();
+  const t = tileDoMouse(e);
+  editor.pintando = { apagar: e.button === 2 };
+  editor.ini = t;
+  editor.fim = t;
+  if (editor.ferramenta === 'pincel') pintarNoEditor(t);
+}
+function pintarNoEditor(t) {
+  const letra = editor.pintando.apagar ? VAZIO[editor.camada] : editor.pincel;
+  if (trocarTile(editor.camada, t.x, t.y, letra)) mapaBase = null;
+}
+window.addEventListener('mousemove', (e) => {
+  if (!editor?.pintando) return;
+  const t = tileDoMouse(e);
+  editor.fim = t;
+  if (editor.ferramenta === 'pincel') pintarNoEditor(t);
+});
+window.addEventListener('mouseup', () => {
+  if (!editor?.pintando) return;
+  if (editor.ferramenta === 'retangulo') {
+    const { ini, fim } = editor;
+    for (let y = Math.min(ini.y, fim.y); y <= Math.max(ini.y, fim.y); y++) {
+      for (let x = Math.min(ini.x, fim.x); x <= Math.max(ini.x, fim.x); x++) pintarNoEditor({ x, y });
+    }
+  }
+  editor.pintando = null;
+  renderEditor();
+});
+$('#tela-mapa').addEventListener('wheel', (e) => {
+  if (!editor) return;
+  e.preventDefault();
+  editor.zoom = Math.min(4, Math.max(1, editor.zoom + (e.deltaY < 0 ? 1 : -1)));
+}, { passive: false });
+
+// grade, efeitos e o retângulo sendo desenhado (só no editor)
+function desenharEditor(c, mundo, tela, dpr) {
+  const m = editor.mapa;
+  for (let y = 0; y < m.a; y++) {
+    for (let x = 0; x < m.l; x++) {
+      const e = m.efe[y][x];
+      if (e === ' ') continue;
+      c.fillStyle = CORES_EFE[e] ?? corArea(e);
+      c.globalAlpha = editor.camada === 'efe' ? 1 : 0.45;
+      c.fillRect(x * T, y * T, T, T);
+      c.globalAlpha = 1;
+    }
+  }
+  c.strokeStyle = 'rgba(255,255,255,.08)';
+  c.lineWidth = 1 / mapa.escala;
+  c.beginPath();
+  for (let x = 0; x <= m.l; x++) { c.moveTo(x * T, 0); c.lineTo(x * T, m.a * T); }
+  for (let y = 0; y <= m.a; y++) { c.moveTo(0, y * T); c.lineTo(m.l * T, y * T); }
+  c.stroke();
+  c.strokeStyle = 'rgba(255,255,255,.5)';
+  c.strokeRect(0, 0, m.l * T, m.a * T);
+  if (editor.pintando && editor.ferramenta === 'retangulo') {
+    const { ini, fim } = editor;
+    c.strokeStyle = editor.pintando.apagar ? '#ff6b6b' : '#fff';
+    c.lineWidth = 2 / mapa.escala;
+    c.strokeRect(Math.min(ini.x, fim.x) * T, Math.min(ini.y, fim.y) * T, (Math.abs(fim.x - ini.x) + 1) * T, (Math.abs(fim.y - ini.y) + 1) * T);
+  }
+  // letra de cada efeito (na resolução da tela)
+  if (editor.camada !== 'efe') return;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.font = '700 10px "gg sans", "Segoe UI", system-ui, sans-serif';
+  c.fillStyle = 'rgba(255,255,255,.85)';
+  for (let y = 0; y < m.a; y++) {
+    for (let x = 0; x < m.l; x++) {
+      const e = m.efe[y][x];
+      if (e === ' ') continue;
+      const p = tela((x + 0.5) * T, (y + 0.5) * T);
+      c.fillText(e, p.x, p.y);
+    }
+  }
+  mundo();
+}
+
+// miniatura de um tile pra paleta
+function previaTile(camada, letra) {
+  const cv = el('canvas');
+  cv.width = T;
+  cv.height = T;
+  const c = cv.getContext('2d');
+  if (camada === 'efe') {
+    c.fillStyle = '#3a3c42';
+    c.fillRect(0, 0, T, T);
+    c.fillStyle = CORES_EFE[letra] ?? corArea(letra);
+    c.fillRect(0, 0, T, T);
+    return cv;
+  }
+  const chao = camada === 'chao' ? letra : 'Tbo'.includes(letra) ? ',' : '.';
+  const m = { l: 1, a: 1, chao: [chao], obj: [camada === 'obj' ? letra : ' '], efe: [' '] };
+  pintarChao(c, m, chao, 0, 0);
+  if (camada === 'obj') pintarObj(c, m, letra, 0, 0);
+  if (letra === 'T') {
+    c.save();
+    c.translate(0, 8);
+    pintarCopa(c, 0, 0);
+    c.restore();
+  }
+  return cv;
+}
+
+const NOMES_CAMADA = { chao: NOMES_CHAO, obj: NOMES_OBJ, efe: NOMES_EFE };
+const DICAS_EFE = {
+  X: 'Ninguém passa (use pra fechar um buraco sem pôr parede)',
+  N: 'Onde a galera aparece ao entrar',
+  P: 'Quem pisa aqui é ouvido pela sala inteira',
+};
+function renderEditor() {
+  if (!editor) return;
+  $$('#editor-mapa [data-camada]').forEach((b) => b.classList.toggle('ativo', b.dataset.camada === editor.camada));
+  $$('#editor-mapa [data-ferramenta]').forEach((b) => b.classList.toggle('ativo', b.dataset.ferramenta === editor.ferramenta));
+  const paleta = $('#paleta-mapa');
+  paleta.replaceChildren();
+  for (const [letra, nome] of Object.entries(NOMES_CAMADA[editor.camada])) {
+    const b = el('button', `tile-paleta${editor.pincel === letra ? ' ativo' : ''}`);
+    b.type = 'button';
+    const titulo = editor.camada === 'efe' && /[1-9]/.test(letra) ? `${nome}: ${editor.mapa.areas[letra] || 'sem nome'}` : nome;
+    b.title = DICAS_EFE[letra] ? `${nome}: ${DICAS_EFE[letra]}` : titulo;
+    b.append(previaTile(editor.camada, letra));
+    if (editor.camada === 'efe') b.append(el('span', 'letra-paleta', letra));
+    b.onclick = () => {
+      editor.pincel = letra;
+      renderEditor();
+    };
+    paleta.append(b);
+  }
+  // nome da área escolhida (aparece no chão e no aviso de quem entra)
+  const area = editor.camada === 'efe' && /[1-9]/.test(editor.pincel);
+  $('#linha-area-mapa').hidden = !area;
+  if (area && document.activeElement !== $('#nome-area-mapa')) $('#nome-area-mapa').value = editor.mapa.areas[editor.pincel] ?? '';
+  $('#dica-editor').textContent = editor.camada === 'efe'
+    ? 'Áreas fechadas: quem está dentro só ouve quem está na mesma área. Pinte com o mesmo número.'
+    : 'Clique e arraste pra pintar · botão direito apaga · WASD mexe a câmera · roda do mouse dá zoom · Ctrl+Z desfaz';
+  if (document.activeElement !== $('#largura-mapa')) $('#largura-mapa').value = editor.mapa.l;
+  if (document.activeElement !== $('#altura-mapa')) $('#altura-mapa').value = editor.mapa.a;
+  $('#btn-desfazer-mapa').disabled = !editor.historico.length;
+}
+
+$$('#editor-mapa [data-camada]').forEach((b) => (b.onclick = () => {
+  editor.camada = b.dataset.camada;
+  editor.pincel = Object.keys(NOMES_CAMADA[editor.camada])[0];
+  renderEditor();
+}));
+$$('#editor-mapa [data-ferramenta]').forEach((b) => (b.onclick = () => {
+  editor.ferramenta = b.dataset.ferramenta;
+  renderEditor();
+}));
+$('#nome-area-mapa').oninput = (e) => {
+  editor.mapa.areas[editor.pincel] = e.target.value.slice(0, 24);
+};
+$('#btn-tamanho-mapa').onclick = () => {
+  const l = Math.min(64, Math.max(8, Math.round(Number($('#largura-mapa').value) || editor.mapa.l)));
+  const a = Math.min(64, Math.max(8, Math.round(Number($('#altura-mapa').value) || editor.mapa.a)));
+  guardarDesfazer();
+  const m = editor.mapa;
+  for (const camada of ['chao', 'obj', 'efe']) {
+    m[camada] = Array.from({ length: a }, (_, y) => (m[camada][y] ?? '').slice(0, l).padEnd(l, VAZIO[camada]));
+  }
+  Object.assign(m, { l, a });
+  mapaBase = null;
+  renderEditor();
+};
+$('#btn-desfazer-mapa').onclick = desfazerEditor;
+$('#btn-cancelar-mapa').onclick = () => {
+  if (editor.historico.length && !confirm('Descartar o que você mudou no mapa?')) return;
+  fecharEditor();
+};
+$('#btn-salvar-mapa').onclick = () => {
+  editor.salvando = true;
+  socket.emit('mapa:salvar', editor.mapa, (r) => {
+    if (!r?.erro) return avisar('Mapa salvo pra todo mundo da sala.', 3000);
+    if (editor) editor.salvando = false;
+    avisar(r.erro);
+  });
+};
+$('#btn-editar-mapa').onclick = abrirEditor;
 
 // ---------- barra do mapa e editor do boneco ----------
 for (const emoji of EMOTES_MAPA) {
@@ -961,16 +1314,11 @@ for (const emoji of EMOTES_MAPA) {
   $('#emotes-mapa').append(b);
 }
 
+// estava vendo uma transmissão grande: volta pro mapa
 $('#btn-mapa').onclick = () => {
-  if (estado.mapa) {
-    foco = null; // estava vendo uma transmissão grande: volta pro mapa
-    renderGrid();
-    return $('#tela-mapa').focus();
-  }
-  socket.emit('mapa:ligar', null, (r) => r?.erro && avisar(r.erro));
-};
-$('#btn-desligar-mapa').onclick = () => {
-  if (confirm('Desligar o mapa pra todo mundo da chamada? Volta todo mundo a se ouvir normal.')) socket.emit('mapa:desligar');
+  foco = null;
+  renderGrid();
+  $('#tela-mapa').focus();
 };
 
 function salvarBoneco(b) {

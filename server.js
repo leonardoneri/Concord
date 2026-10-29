@@ -141,6 +141,28 @@ function criarLimitador() {
 
 // ---------- mapa da chamada (sala pixel art com áudio por proximidade) ----------
 const MAPA_MAX = 64; // tamanho máximo do mapa em tiles (o desenho fica no app)
+// O mapa de um canal de voz: 3 camadas de texto, uma letra por tile (o app sabe desenhar cada uma)
+//   chao = piso/parede, obj = móveis (' ' = nada), efe = efeitos: X bloqueia, N nasce, P palco, 1-9 área fechada
+const MAPA_CHAO = new Set(',*:~#._=+');
+const MAPA_OBJ = new Set(' TSVMhPLAQGFBbod');
+const MAPA_EFE = new Set(' XNP123456789');
+function limparMapa(m) {
+  if (typeof m !== 'object' || m === null) return null;
+  const l = Number(m.l);
+  const a = Number(m.a);
+  if (!Number.isInteger(l) || !Number.isInteger(a) || l < 8 || a < 8 || l > MAPA_MAX || a > MAPA_MAX) return null;
+  const camada = (linhas, validas) => (Array.isArray(linhas) && linhas.length === a
+    && linhas.every((x) => typeof x === 'string' && x.length === l && [...x].every((c) => validas.has(c))) ? linhas : null);
+  const chao = camada(m.chao, MAPA_CHAO);
+  const obj = camada(m.obj, MAPA_OBJ);
+  const efe = camada(m.efe, MAPA_EFE);
+  if (!chao || !obj || !efe) return null;
+  const areas = {};
+  for (const [k, v] of Object.entries(typeof m.areas === 'object' && m.areas ? m.areas : {})) {
+    if (/^[1-9]$/.test(k)) areas[k] = String(v ?? '').replace(/[\p{C}]/gu, '').trim().slice(0, 24);
+  }
+  return { l, a, chao, obj, efe, areas };
+}
 // opções do boneco: quantas escolhas tem cada parte
 const BONECO = { pele: 6, cabelo: 6, corCabelo: 8, roupa: 10, calca: 5 };
 function limparBoneco(b) {
@@ -488,7 +510,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       status: "TEXT NOT NULL DEFAULT 'online'", status_texto: "TEXT NOT NULL DEFAULT ''",
     },
     mensagens: { conta: 'INTEGER', editado_em: 'INTEGER', fixada: 'INTEGER NOT NULL DEFAULT 0', canal_id: 'INTEGER', resposta: 'INTEGER', enquete: 'TEXT' },
-    canais: { servidor: 'INTEGER', privado: 'INTEGER NOT NULL DEFAULT 0' },
+    canais: { servidor: 'INTEGER', privado: 'INTEGER NOT NULL DEFAULT 0', mapa: 'TEXT' },
+    cargos: { construtor: 'INTEGER NOT NULL DEFAULT 0' },
   };
   for (const [tabela, colunas] of Object.entries(colunasNovas)) {
     const existentes = new Set(db.prepare(`PRAGMA table_info(${tabela})`).all().map((c) => c.name));
@@ -559,10 +582,12 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     apagarSom: db.prepare('DELETE FROM sons WHERE id = ?'),
     apagarSonsDo: db.prepare('DELETE FROM sons WHERE servidor = ?'),
     // cargos (ordem = posicao: o primeiro é o "mais alto", que dá a cor do nome)
-    cargosDo: db.prepare('SELECT id, nome, cor FROM cargos WHERE servidor = ? ORDER BY posicao, id'),
+    cargosDo: db.prepare('SELECT id, nome, cor, construtor FROM cargos WHERE servidor = ? ORDER BY posicao, id'),
+    constroiMapas: db.prepare(`SELECT 1 FROM membro_cargos mc JOIN cargos c ON c.id = mc.cargo
+      WHERE mc.servidor = ? AND mc.conta = ? AND c.construtor = 1`),
     cargo: db.prepare('SELECT * FROM cargos WHERE id = ?'),
     criarCargo: db.prepare('INSERT INTO cargos (servidor, nome, cor, posicao) VALUES (?, ?, ?, (SELECT COALESCE(MAX(posicao), -1) + 1 FROM cargos WHERE servidor = ?))'),
-    editarCargo: db.prepare('UPDATE cargos SET nome = ?, cor = ? WHERE id = ?'),
+    editarCargo: db.prepare('UPDATE cargos SET nome = ?, cor = ?, construtor = ? WHERE id = ?'),
     posicaoCargo: db.prepare('UPDATE cargos SET posicao = ? WHERE id = ?'),
     apagarCargo: db.prepare('DELETE FROM cargos WHERE id = ?'),
     tirarCargoDeTodos: db.prepare('DELETE FROM membro_cargos WHERE cargo = ?'),
@@ -625,6 +650,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     criarCanal: db.prepare(`INSERT INTO canais (servidor, tipo, nome, topico, posicao)
       VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(posicao), 0) + 1 FROM canais WHERE servidor = ?))`),
     editarCanal: db.prepare('UPDATE canais SET nome = ?, topico = ? WHERE id = ?'),
+    mapaCanal: db.prepare('UPDATE canais SET mapa = ? WHERE id = ?'),
     posicaoCanal: db.prepare('UPDATE canais SET posicao = ? WHERE id = ?'),
     apagarCanal: db.prepare('DELETE FROM canais WHERE id = ?'),
     apagarMensagensDoCanal: db.prepare('DELETE FROM mensagens WHERE canal_id = ?'),
@@ -716,10 +742,10 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     return {
       ...resumoServidor(s),
       convite: s.convite,
-      canais: sql.canaisDo.all(id).filter((c) => podeVerCanal(c, conta)).map(({ id: cid, tipo, nome, topico, privado }) => ({
-        id: cid, tipo, nome, topico, privado: !!privado, cargos: privado ? sql.cargosDoCanal.all(cid).map((x) => x.cargo) : [],
+      canais: sql.canaisDo.all(id).filter((c) => podeVerCanal(c, conta)).map(({ id: cid, tipo, nome, topico, privado, mapa }) => ({
+        id: cid, tipo, nome, topico, privado: !!privado, cargos: privado ? sql.cargosDoCanal.all(cid).map((x) => x.cargo) : [], mapa: !!mapa,
       })),
-      cargos: sql.cargosDo.all(id),
+      cargos: sql.cargosDo.all(id).map((c) => ({ ...c, construtor: !!c.construtor })),
       eventos: sql.eventosDo.all(id, Date.now() - DURA_EVENTO).map(eventoPublico),
       emojis: sql.emojisDo.all(id),
     };
@@ -828,8 +854,15 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   const previas = new Map(); // id do usuário -> miniatura da tela que a pessoa está transmitindo
   // "Assistir junto": canal de voz -> { video, por, tocando, posicao, em } (posicao em segundos no instante `em`)
   const assistindo = new Map();
-  // canais de voz com o mapa ligado (a posição e o boneco ficam em cada usuário: u.pos, u.boneco)
-  const mapas = new Set();
+  // mapa de cada canal de voz que tem (fica no banco; aqui é só o cache). A posição e o boneco ficam em cada usuário: u.pos, u.boneco
+  const mapas = new Map();
+  function mapaDoCanal(id) {
+    if (!mapas.has(id)) {
+      const c = sql.canal.get(id);
+      mapas.set(id, c?.tipo === 'voz' && c.mapa ? JSON.parse(c.mapa) : null);
+    }
+    return mapas.get(id);
+  }
   const sala = (srv) => `s:${srv}`;
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
@@ -942,26 +975,36 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     const dados = assistirPublico(canal);
     for (const o of usuarios.values()) if (o.voz === canal) io.to(o.socket).emit('assistir', dados);
   }
-  // sala vazia: para o vídeo (e desliga o mapa)
+  // sala vazia: para o vídeo
   function limparAssistir() {
     for (const canal of assistindo.keys()) {
       if (![...usuarios.values()].some((o) => o.voz === canal)) assistindo.delete(canal);
     }
-    for (const canal of mapas) {
-      if (![...usuarios.values()].some((o) => o.voz === canal)) mapas.delete(canal);
-    }
   }
 
-  // mapa: quem está na sala, onde está e com que boneco
+  // mapa: o desenho, quem está na sala, onde está e com que boneco
   function mapaPublico(canal) {
-    if (!mapas.has(canal)) return null;
+    const mapa = mapaDoCanal(canal);
+    if (!mapa) return null;
     const pessoas = [...usuarios.values()].filter((o) => o.voz === canal && o.pos)
       .map((o) => ({ id: o.id, ...o.pos, boneco: o.boneco ?? null }));
-    return { pessoas };
+    return { mapa, pessoas };
   }
-  function emitirMapa(canal, semSocket = null) {
+  // o mapa do canal mudou: quem está nele recebe o novo. Trocou de modelo ou tirou: todo mundo nasce de novo;
+  // editado: cada um continua onde estava (o app acha outro lugar se ali virou parede)
+  function mudouMapa(canal, mapa, reiniciar = true) {
+    sql.mapaCanal.run(mapa ? JSON.stringify(mapa) : null, canal);
+    mapas.set(canal, mapa);
+    if (reiniciar) for (const o of usuarios.values()) if (o.voz === canal) o.pos = null;
+    emitirMapa(canal);
+  }
+  // admin, ou tem um cargo que constrói mapas
+  const podeConstruir = (srv, conta) => ehAdminDe(srv, conta) || !!sql.constroiMapas.get(srv, conta);
+  // cada um recebe também se pode editar o mapa
+  const mapaPara = (o, dados) => dados && { ...dados, podeEditar: podeConstruir(sql.canal.get(o.voz).servidor, o.conta) };
+  function emitirMapa(canal) {
     const dados = mapaPublico(canal);
-    for (const o of usuarios.values()) if (o.voz === canal && o.socket !== semSocket) io.to(o.socket).emit('mapa', dados);
+    for (const o of usuarios.values()) if (o.voz === canal) io.to(o.socket).emit('mapa', mapaPara(o, dados));
   }
 
   function tirarDaVoz(filtro) {
@@ -1336,13 +1379,17 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       return c && ehAdminDe(c.servidor, u.conta) ? c : null;
     };
 
-    quandoAdmin('canal:criar', (u, { tipo, nome } = {}, ack, srv) => {
+    // sala de voz pode já nascer com mapa (o app manda o modelo escolhido)
+    quandoAdmin('canal:criar', (u, { tipo, nome, mapa } = {}, ack, srv) => {
       if (!['texto', 'voz'].includes(tipo)) return ack({ erro: 'Tipo de canal inválido' });
       const limpo = limparNomeCanal(tipo, nome);
       if (limpo.erro) return ack(limpo);
       if (sql.canalPorNome.get(srv, tipo, limpo.nome)) return ack({ erro: `Já existe um canal "${limpo.nome}"` });
       if (sql.canaisDo.all(srv).length >= MAX_CANAIS) return ack({ erro: `Limite de ${MAX_CANAIS} canais por servidor` });
+      const mapaLimpo = tipo === 'voz' && mapa != null ? limparMapa(mapa) : null;
+      if (tipo === 'voz' && mapa != null && !mapaLimpo) return ack({ erro: 'Mapa inválido' });
       const { lastInsertRowid } = sql.criarCanal.run(srv, tipo, limpo.nome, '', srv);
+      if (mapaLimpo) sql.mapaCanal.run(JSON.stringify(mapaLimpo), Number(lastInsertRowid));
       emitirServidor(srv);
       ack({ id: Number(lastInsertRowid), nome: limpo.nome });
     });
@@ -1358,6 +1405,18 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       sql.editarCanal.run(limpo.nome, topico, canal.id);
       emitirServidor(canal.servidor);
       ack({ nome: limpo.nome });
+    });
+
+    // põe (o modelo escolhido) ou tira o mapa de uma sala de voz que já existe
+    quando('canal:mapa', (u, { id, mapa } = {}, ack) => {
+      const canal = canalDoAdmin(u, id);
+      if (!canal) return ack({ erro: 'Só admin pode fazer isso' });
+      if (canal.tipo !== 'voz') return ack({ erro: 'Só sala de voz tem mapa' });
+      const limpo = mapa == null ? null : limparMapa(mapa);
+      if (mapa != null && !limpo) return ack({ erro: 'Mapa inválido' });
+      mudouMapa(canal.id, limpo);
+      emitirServidor(canal.servidor);
+      ack({});
     });
 
     // privado = só admins e quem tem um dos `cargos` vê o canal
@@ -1392,15 +1451,17 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       mudouCargos(srv);
       ack({ id: Number(lastInsertRowid) });
     });
-    quandoAdmin('cargo:editar', (u, { id, nome, cor } = {}, ack, srv) => {
+    // construtor = quem tem o cargo edita os mapas das salas
+    quandoAdmin('cargo:editar', (u, { id, nome, cor, construtor } = {}, ack, srv) => {
       const c = cargoDoServidor(id, srv);
       if (!c) return ack({ erro: 'Cargo não encontrado' });
       nome = nome == null ? c.nome : limparLinha(nome, 24);
       cor = cor ?? c.cor;
+      construtor = construtor == null ? c.construtor : construtor ? 1 : 0;
       if (!nome) return ack({ erro: 'Dá um nome pro cargo' });
       if (!COR_RE.test(cor)) return ack({ erro: 'Cor inválida' });
       if (sql.cargosDo.all(srv).some((x) => x.id !== c.id && x.nome.toLowerCase() === nome.toLowerCase())) return ack({ erro: `Já existe o cargo "${nome}"` });
-      sql.editarCargo.run(nome, cor, c.id);
+      sql.editarCargo.run(nome, cor, construtor, c.id);
       mudouCargos(srv);
       ack({});
     });
@@ -1879,25 +1940,22 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     quando('assistir:estado', (u, _, ack) => ack(u.voz != null ? assistirPublico(u.voz) : null));
 
     // ---------- mapa da chamada: cada um anda com seu boneco e ouve mais alto quem está perto ----------
-    quando('mapa:ligar', (u, _, ack) => {
-      if (u.voz == null) return ack({ erro: 'Entra numa sala de voz primeiro' });
-      mapas.add(u.voz);
-      emitirMapa(u.voz);
+    // editor: quem constrói salva o mapa da sala em que está
+    quando('mapa:salvar', (u, mapa, ack) => {
+      const c = u.voz != null && sql.canal.get(u.voz);
+      if (!c || !mapaDoCanal(c.id)) return ack({ erro: 'Essa sala não tem mapa' });
+      if (!podeConstruir(c.servidor, u.conta)) return ack({ erro: 'Só admin ou quem tem cargo de construtor edita o mapa' });
+      const limpo = limparMapa(mapa);
+      if (!limpo) return ack({ erro: 'Mapa inválido' });
+      mudouMapa(c.id, limpo, false);
       ack({});
     });
-    quando('mapa:desligar', (u, _, ack) => {
-      if (u.voz != null && mapas.delete(u.voz)) {
-        for (const o of usuarios.values()) if (o.voz === u.voz) o.pos = null;
-        emitirMapa(u.voz);
-      }
-      ack({});
-    });
-    quando('mapa:estado', (u, _, ack) => ack(u.voz != null ? mapaPublico(u.voz) : null));
+    quando('mapa:estado', (u, _, ack) => ack(u.voz != null ? mapaPara(u, mapaPublico(u.voz)) : null));
     quando('mapa:boneco', (u, b, ack) => {
       const boneco = limparBoneco(b);
       if (!boneco) return ack({ erro: 'Boneco inválido' });
       u.boneco = boneco;
-      if (u.voz != null && mapas.has(u.voz) && u.pos) {
+      if (u.voz != null && mapaDoCanal(u.voz) && u.pos) {
         for (const o of usuarios.values()) if (o.voz === u.voz && o.id !== u.id) io.to(o.socket).emit('mapa:boneco', { id: u.id, boneco });
       }
       ack({});
@@ -1905,7 +1963,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     // posição em tiles (pode ser quebrada), direção e se está andando; vai pra sala sem esperar confirmação
     let ultimoPasso = 0;
     quando('mapa:mover', (u, { x, y, dir, anda } = {}) => {
-      if (u.voz == null || !mapas.has(u.voz)) return;
+      if (u.voz == null || !mapaDoCanal(u.voz)) return;
       x = Number(x);
       y = Number(y);
       if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > MAPA_MAX || y > MAPA_MAX) return;
@@ -1922,7 +1980,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     // emoji em cima do boneco por uns segundos
     let ultimoEmote = 0;
     quando('mapa:emote', (u, emoji, ack) => {
-      if (u.voz == null || !mapas.has(u.voz)) return ack({});
+      if (u.voz == null || !mapaDoCanal(u.voz)) return ack({});
       if (typeof emoji !== 'string' || !EMOJI_RE.test(emoji)) return ack({ erro: 'Emoji inválido' });
       if (Date.now() - ultimoEmote < 700) return ack({});
       ultimoEmote = Date.now();

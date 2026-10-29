@@ -161,11 +161,38 @@
             <div id="mapa">
               <canvas id="tela-mapa" tabindex="0"></canvas>
               <div id="zona-mapa" hidden></div>
+              <aside id="editor-mapa" hidden>
+                <h3>Editar mapa</h3>
+                <div class="abas-editor">
+                  <button type="button" data-camada="chao">Chão</button>
+                  <button type="button" data-camada="obj">Objetos</button>
+                  <button type="button" data-camada="efe">Efeitos</button>
+                </div>
+                <div class="abas-editor">
+                  <button type="button" data-ferramenta="pincel">Pincel</button>
+                  <button type="button" data-ferramenta="retangulo">Retângulo</button>
+                </div>
+                <div id="paleta-mapa"></div>
+                <label id="linha-area-mapa" hidden>Nome da área
+                  <input id="nome-area-mapa" maxlength="24" placeholder="Ex.: Sala de reunião" autocomplete="off">
+                </label>
+                <p class="dica-cfg" id="dica-editor"></p>
+                <div class="tamanho-mapa">
+                  <label>Largura <input type="number" id="largura-mapa" min="8" max="64"></label>
+                  <label>Altura <input type="number" id="altura-mapa" min="8" max="64"></label>
+                  <button type="button" class="btn-secundario" id="btn-tamanho-mapa">Aplicar</button>
+                </div>
+                <div class="acoes-editor">
+                  <button type="button" class="btn-secundario" id="btn-desfazer-mapa" title="Ctrl+Z">Desfazer</button>
+                  <button type="button" class="btn-secundario" id="btn-cancelar-mapa">Cancelar</button>
+                  <button type="button" class="btn-primario" id="btn-salvar-mapa">Salvar</button>
+                </div>
+              </aside>
               <div class="barra-mapa">
                 <span id="info-mapa">WASD ou setas pra andar · clique pra ir até lá · perto = ouve mais alto</span>
                 <div id="emotes-mapa"></div>
                 <button type="button" class="btn-secundario" id="btn-boneco">Meu boneco</button>
-                <button type="button" class="btn-secundario" id="btn-desligar-mapa">Desligar mapa</button>
+                <button type="button" class="btn-secundario" id="btn-editar-mapa" hidden>Editar mapa</button>
               </div>
             </div>
             <div id="tira"></div>
@@ -176,7 +203,7 @@
             <button class="btn-redondo btn-mudo" title="Silenciar"></button>
             <button class="btn-redondo" id="btn-tira" title="Esconder participantes" data-icone="membros" hidden></button>
             <button class="btn-redondo" id="btn-assistir" title="Assistir junto: um vídeo do YouTube sincronizado pra todo mundo da chamada" data-icone="tv"></button>
-            <button class="btn-redondo" id="btn-mapa" title="Mapa: cada um anda com um bonequinho e ouve mais alto quem está perto" data-icone="mapa"></button>
+            <button class="btn-redondo" id="btn-mapa" title="Voltar pro mapa" data-icone="mapa" hidden></button>
             <button class="btn-redondo" id="btn-sons" title="Soundboard: tocar um som pra todo mundo da chamada" data-icone="sons"></button>
             <button class="btn-redondo" id="btn-times" title="Sortear times com quem está na chamada" data-icone="dado"></button>
             <button class="btn-redondo perigo btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
@@ -358,12 +385,17 @@
         <ul class="srv-canais" id="srv-canais-voz"></ul>
         <form class="linha-copiar srv-novo" data-tipo="voz">
           <input placeholder="Nome da sala" maxlength="32" required>
+          <select id="mapa-nova-sala" title="Mapa em pixel art: cada um anda com um boneco e ouve mais alto quem está perto">
+            <option value="">Sem mapa</option>
+            <option value="casa">Com mapa: Casa</option>
+            <option value="gramado">Com mapa: Gramado vazio</option>
+          </select>
           <button class="btn-primario">Criar</button>
         </form>
       </section>
       <section>
         <h3>Cargos</h3>
-        <p class="dica-cfg">O nome de quem tem cargo aparece na cor do cargo mais alto da lista. Dê cargos clicando no nome da pessoa. Canais podem ficar só pra alguns cargos no cadeado ao lado do canal.</p>
+        <p class="dica-cfg">O nome de quem tem cargo aparece na cor do cargo mais alto da lista. Dê cargos clicando no nome da pessoa. Canais podem ficar só pra alguns cargos no cadeado ao lado do canal. Quem tem cargo com <b>Constrói mapas</b> edita os mapas das salas (admins sempre podem).</p>
         <ul class="srv-cargos" id="srv-cargos"></ul>
         <form class="linha-copiar" id="form-cargo">
           <input type="color" id="cargo-cor" value="#e67e22" title="Cor do cargo">

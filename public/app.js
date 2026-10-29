@@ -1207,6 +1207,7 @@ function renderCanais() {
     const li = el('li');
     const nome = el('div', 'canal');
     nome.append(icone('voz'), el('span', null, c.nome));
+    if (c.mapa) nome.append(Object.assign(icone('mapa', 'privado'), { title: 'Sala com mapa' }));
     if (c.privado) nome.append(icone('cadeado', 'privado'));
     nome.classList.toggle('ativo', estado.view === 'voz' && c.id === estado.voz);
     nome.onclick = () => entrarVoz(c.id);
@@ -2839,7 +2840,7 @@ function renderGrid() {
   destaqueAtual = destaque;
   const videoGrande = destaque === 'assistir';
   grid.classList.toggle('mapa', noMapa && !destaque);
-  $('#btn-mapa').classList.toggle('ligado', noMapa);
+  $('#btn-mapa').hidden = !noMapa || !destaque;
   grid.classList.toggle('foco', !!destaque);
   grid.classList.toggle('assistindo', videoGrande);
   grid.classList.toggle('assistindo-mini', assistindo && !videoGrande);
@@ -4505,7 +4506,14 @@ function renderCargosServidor() {
     nome.maxLength = 24;
     nome.onchange = () => socket.emit('cargo:editar', { id: c.id, nome: nome.value }, respostaServidor);
     const qtd = estado.perfis.filter((p) => p.cargos?.includes(c.id)).length;
-    li.append(cor, nome, el('span', 'srv-cargo-n', `${qtd} ${qtd === 1 ? 'pessoa' : 'pessoas'}`));
+    const constroi = el('input');
+    constroi.type = 'checkbox';
+    constroi.checked = !!c.construtor;
+    constroi.onchange = () => socket.emit('cargo:editar', { id: c.id, construtor: constroi.checked }, respostaServidor);
+    const rotulo = el('label', 'srv-cargo-mapa');
+    rotulo.title = 'Quem tem esse cargo edita os mapas das salas';
+    rotulo.append(constroi, el('span', null, 'Constrói mapas'));
+    li.append(cor, nome, el('span', 'srv-cargo-n', `${qtd} ${qtd === 1 ? 'pessoa' : 'pessoas'}`), rotulo);
     const botao = (ic, titulo, acao, desligado) => {
       const b = el('button', 'btn-icone');
       b.type = 'button';
@@ -4578,6 +4586,7 @@ function linhaCanal(c, lista) {
   nome.title = 'Nome do canal';
   nome.onchange = () => editarCanal(c.id, { nome: nome.value });
   li.append(nome);
+  if (c.tipo === 'voz') li.append(seletorMapa(c));
   if (c.tipo === 'texto') {
     const topico = el('input', 'srv-topico');
     topico.value = c.topico;
@@ -4613,6 +4622,25 @@ function linhaCanal(c, lista) {
   }, lista.length <= 1);
   if (acessoAberto.has(c.id)) li.append(painelAcesso(c));
   return li;
+}
+
+// sala de voz: com ou sem mapa (trocar de modelo apaga o mapa que estava)
+function seletorMapa(c) {
+  const sel = el('select', 'srv-mapa');
+  sel.title = 'Mapa em pixel art da sala';
+  const opcoes = [['', 'Sem mapa'], ...(c.mapa ? [['tem', 'Com mapa']] : []),
+    ...Object.entries(MODELOS_MAPA).map(([k, m]) => [k, c.mapa ? `Trocar pro modelo: ${m.nome}` : `Com mapa: ${m.nome}`])];
+  for (const [valor, texto] of opcoes) sel.append(Object.assign(el('option', null, texto), { value: valor }));
+  sel.value = c.mapa ? 'tem' : '';
+  sel.onchange = () => {
+    const modelo = MODELOS_MAPA[sel.value];
+    const ok = modelo
+      ? !c.mapa || confirm(`Trocar o mapa de "${c.nome}" pelo modelo ${modelo.nome}? O mapa de agora se perde.`)
+      : confirm(`Tirar o mapa de "${c.nome}"? O desenho se perde e a sala vira chamada normal.`);
+    if (!ok) return renderModalServidor(true);
+    socket.emit('canal:mapa', { id: c.id, mapa: modelo ? modelo.criar() : null }, respostaServidor);
+  };
+  return sel;
 }
 
 const respostaServidor = (res) => {
@@ -4689,7 +4717,8 @@ $('#btn-remover-icone').onclick = () => socket.emit('servidor:icone', null, resp
 $$('.srv-novo').forEach((form) => form.addEventListener('submit', (e) => {
   e.preventDefault();
   const input = form.querySelector('input');
-  socket.emit('canal:criar', { tipo: form.dataset.tipo, nome: input.value }, (res) => {
+  const modelo = form.dataset.tipo === 'voz' && MODELOS_MAPA[$('#mapa-nova-sala').value];
+  socket.emit('canal:criar', { tipo: form.dataset.tipo, nome: input.value, mapa: modelo ? modelo.criar() : undefined }, (res) => {
     if (res?.erro) return avisar(res.erro);
     input.value = '';
     renderModalServidor(true);
