@@ -146,7 +146,7 @@ const MAPA_MAX = 64; // tamanho máximo do mapa em tiles (o desenho fica no app)
 // portais: "x,y" -> { canal (0 = a própria sala), x, y (onde chega; null = num ponto de nascer) }
 // recados: "x,y" de um quadro (R) -> { texto, por, em }; quem escreve é qualquer um da sala (mapa:recado)
 const MAPA_CHAO = new Set(',*:~#._=+akel');
-const MAPA_OBJ = new Set(' TSVMhPLAQGFBbodCKRUYzkDE');
+const MAPA_OBJ = new Set(' TSVMhPLAQGFBbodCKRUYzkDEHpqjcirxvmnstgwfylua');
 const MAPA_EFE = new Set(' XNPO123456789');
 const MAX_PORTAIS = 64;
 const MAX_RECADO = 300;

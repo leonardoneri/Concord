@@ -15,10 +15,13 @@ const NOMES_OBJ = {
   R: 'Quadro de recados (tecla E)', A: 'Fliperama', Q: 'Sinuca', D: 'Alvo de dardos', C: 'Computador', K: 'Cadeira gamer',
   G: 'Geladeira', F: 'Fogão', B: 'Balcão', k: 'Banquinho', E: 'Caixa de som', b: 'Banco', o: 'Fogueira', d: 'Puff',
   U: 'Guarda-sol', z: 'Espreguiçadeira',
+  H: 'Cama', p: 'Piano', q: 'Quadro (põe na parede)', j: 'Espelho', c: 'Castiçal', i: 'Pia', r: 'Armário', x: 'Varal',
+  v: 'Vaso', m: 'Mesa redonda', n: 'Poltrona', s: 'Cadeira de escritório', t: 'Criado-mudo', g: 'Globo',
+  w: 'Arbusto', f: 'Cerca', y: 'Placa', l: 'Tronco', u: 'Cogumelo', a: 'Pote',
 };
 const NOMES_EFE = { X: 'Bloqueio', N: 'Nascer', P: 'Palco', O: 'Portal', ...Object.fromEntries([...'123456789'].map((n) => [n, `Área ${n}`])) };
 const BLOQ_CHAO = new Set('#~');
-const BLOQ_OBJ = new Set('TYSVMPLRAQDCGFBEboU');
+const BLOQ_OBJ = new Set('TYSVMPLRAQDCGFBEboUHpqjcirxvmtgwfyla');
 // objetos que fazem alguma coisa com a tecla E
 const INTERATIVOS = { V: 'Assistir junto', R: 'Quadro de recados' };
 const PERTO = 2.5; // até aqui (em tiles) ouve com volume cheio
@@ -302,8 +305,90 @@ function modeloGameHouse() {
   ret('efe', 21, 29, 26, 31, 'N');
   return { ...fim(areas), aberto: true };
 }
+// escritório: área aberta com mesas, reunião, sala do chefe, copa e recepção com sofás
+function modeloEscritorio() {
+  const { g, ret, fim } = construir(40, 26, 'k');
+  paredes(ret, 0, 0, 39, 25);
+  ret('chao', 13, 25, 14, 25, '+');
+  // área aberta: três fileiras de mesas com computador
+  for (const y of [3, 7, 11]) {
+    for (const [x0, x1] of [[3, 10], [15, 22]]) {
+      ret('obj', x0, y, x1, y, 'C');
+      ret('obj', x0, y + 1, x1, y + 1, 's');
+    }
+  }
+  for (const x of [5, 13, 21]) g.obj[0][x] = 'q';
+  g.obj[1][1] = 'P';
+  g.obj[1][26] = 'P';
+  ret('obj', 12, 1, 14, 1, 'r');
+  g.obj[15][1] = 'v';
+  g.obj[15][26] = 'v';
+  // recepção e sofás perto da entrada
+  ret('chao', 1, 17, 26, 24, '.');
+  ret('chao', 3, 19, 10, 23, '=');
+  ret('obj', 4, 19, 9, 19, 'S');
+  ret('obj', 5, 21, 8, 21, 'M');
+  g.obj[22][3] = 'n';
+  g.obj[22][10] = 'n';
+  g.obj[23][3] = 't';
+  ret('obj', 16, 20, 20, 20, 'B');
+  g.obj[19][18] = 's';
+  g.obj[17][24] = 'R';
+  g.obj[24][1] = 'P';
+  g.obj[24][26] = 'P';
+  g.obj[17][1] = 'L';
+  g.obj[17][2] = 'L';
+  // salas fechadas à direita
+  ret('chao', 27, 0, 27, 25, '#');
+  ret('chao', 27, 9, 39, 9, '#');
+  ret('chao', 27, 17, 39, 17, '#');
+  // reunião
+  ret('chao', 28, 1, 38, 8, '.');
+  g.chao[5][27] = '+';
+  ret('obj', 31, 1, 35, 1, 'V');
+  ret('obj', 30, 4, 36, 5, 'M');
+  ret('obj', 30, 3, 36, 3, 'h');
+  ret('obj', 30, 6, 36, 6, 'h');
+  g.obj[1][28] = 'P';
+  g.obj[8][38] = 'P';
+  g.obj[0][37] = 'q';
+  ret('efe', 28, 1, 38, 8, '1');
+  // sala do chefe
+  ret('chao', 28, 10, 38, 16, 'k');
+  ret('chao', 31, 13, 35, 15, '=');
+  g.chao[13][27] = '+';
+  ret('obj', 31, 11, 33, 11, 'C');
+  g.obj[12][32] = 'K';
+  ret('obj', 36, 10, 38, 10, 'L');
+  g.obj[10][29] = 'g';
+  g.obj[9][33] = 'q';
+  g.obj[15][32] = 'n';
+  g.obj[15][34] = 'n';
+  g.obj[15][33] = 't';
+  g.obj[16][38] = 'P';
+  g.obj[16][28] = 'v';
+  ret('efe', 28, 10, 38, 16, '2');
+  // copa
+  ret('chao', 28, 18, 38, 24, '_');
+  g.chao[21][27] = '+';
+  g.obj[18][29] = 'i';
+  ret('obj', 30, 18, 32, 18, 'r');
+  g.obj[18][33] = 'G';
+  g.obj[18][34] = 'F';
+  for (const x of [31, 35]) {
+    g.obj[22][x] = 'm';
+    g.obj[22][x - 1] = 'h';
+    g.obj[22][x + 1] = 'h';
+  }
+  g.obj[18][38] = 'P';
+  g.obj[24][38] = 'v';
+  ret('efe', 28, 18, 38, 24, '3');
+  ret('efe', 12, 23, 15, 24, 'N');
+  return fim({ 1: 'Sala de reunião', 2: 'Sala do chefe', 3: 'Copa' });
+}
 const MODELOS_MAPA = {
   gamehouse: { nome: 'Game House', criar: modeloGameHouse },
+  escritorio: { nome: 'Escritório', criar: modeloEscritorio },
   zero: { nome: 'Do zero (área de construção)', criar: modeloZero },
   casa: { nome: 'Casa', criar: modeloCasa },
   lan: { nome: 'Lan house', criar: modeloLan },
@@ -393,6 +478,29 @@ function objKenney(c, m, ch, tx, ty) {
       return mesa(0, -1) ? p(1, 2) : mesa(1, 0) ? p(2, 2) : mesa(-1, 0) ? p(3, 2) : p(0, 2);
     }
     case 'S': return lado < 0 ? p(0, 7) : p([4, 5, 7][lado], 7);
+    case 'H': return lado < 0 ? p(9, 6) : p(lado === 2 ? 13 : 12, 6); // de solteiro, ou de casal com duas peças
+    case 'p': return p(lado === 2 ? 24 : 23, 8);
+    case 'q': return p(rnd(tx, ty, 96) < 0.5 ? 19 : 20, rnd(tx, ty, 95) < 0.5 ? 12 : 15);
+    case 'j': return p(22, 15);
+    case 'c': return p(19, 1);
+    case 'i': return p(8, 12);
+    case 'r': return p(rnd(tx, ty, 94) < 0.5 ? 1 : 0, 13);
+    case 'x': return p(16 + ((rnd(tx, ty, 93) * 3) | 0), 2);
+    case 'v': return p(rnd(tx, ty, 92) < 0.5 ? 16 : 17, 4);
+    case 'm': return p(7, 0);
+    case 'n': return p(0, 6);
+    case 's': return p(0, 8);
+    case 't': return p(6, 5);
+    case 'g': return p(22, 10);
+    case 'w': return peca(c, 'cidade', 5, 0, tx, ty);
+    case 'u': return peca(c, 'cidade', 5, 2, tx, ty);
+    case 'y': return peca(c, 'cidade', 11, 6, tx, ty);
+    case 'l': return peca(c, 'cidade', 10, 8, tx, ty);
+    case 'a': return peca(c, 'cidade', 11, 8, tx, ty);
+    case 'f': { // cerca: emenda com as vizinhas
+      if (lado >= 0) return peca(c, 'cidade', [8, 9, 10][lado], 6, tx, ty);
+      return peca(c, 'cidade', 11, igual(0, -1) || igual(0, 1) ? 4 : 3, tx, ty);
+    }
     case 'B': return lado < 0 ? p(1, 12) : p([8, 9, 10][lado], 15);
     case 'M': {
       const cima = igual(0, -1);
@@ -1832,7 +1940,7 @@ function previaTile(camada, letra) {
     c.fillRect(0, 0, T, T);
     return cv;
   }
-  const chao = camada === 'chao' ? letra : 'YUz'.includes(letra) ? 'a' : 'Tbo'.includes(letra) ? ',' : '.';
+  const chao = camada === 'chao' ? letra : 'YUz'.includes(letra) ? 'a' : 'Tbowfylua'.includes(letra) ? ',' : '.';
   const m = { l: 1, a: 1, chao: [chao], obj: [camada === 'obj' ? letra : ' '], efe: [' '] };
   pintarChao(c, m, chao, 0, 0);
   if (camada === 'obj') pintarObj(c, m, letra, 0, 0);
