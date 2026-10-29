@@ -247,6 +247,23 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('tirar o mapa avisa quem está na sala', (await tirou) === null && (await emit(leo, 'mapa:estado')) === null);
   await emit(leo, 'canal:mapa', { id: salaMapa, mapa: mapaTeste });
   ok('pôr mapa numa sala que já existe', (await emit(leo, 'mapa:estado'))?.mapa.l === 10);
+  // portais e quadro de recados
+  const comPortal = {
+    ...mapaTeste, efe: ['O         ', ...linhas(' ').slice(1)], obj: [' R        ', ...linhas(' ').slice(1)],
+    portais: { '0,0': { canal: voz, x: 2, y: 3 }, '5,5': { canal: voz, x: 1, y: 1 } },
+  };
+  await emit(leo, 'mapa:salvar', comPortal);
+  let e3 = (await emit(leo, 'mapa:estado')).mapa;
+  ok('portal só vale em cima de um tile de portal', e3.portais['0,0']?.canal === voz && e3.portais['0,0'].x === 2 && !e3.portais['5,5']);
+  ok('recado só em cima de quadro', !!(await emit(ana, 'mapa:recado', { x: 3, y: 0, texto: 'oi' })).erro);
+  const recado = proximo(leo, 'mapa');
+  ok('qualquer um da sala escreve no quadro', !(await emit(ana, 'mapa:recado', { x: 1, y: 0, texto: '  bora jogar às 21h  ' })).erro);
+  ok('o recado chega pra sala', (await recado)?.mapa.recados['1,0']?.texto === 'bora jogar às 21h');
+  await emit(leo, 'mapa:salvar', { ...comPortal, recados: {} });
+  e3 = (await emit(leo, 'mapa:estado')).mapa;
+  ok('salvar o editor não apaga os recados', e3.recados['1,0']?.por === 'Ana');
+  await emit(leo, 'mapa:salvar', { ...comPortal, obj: linhas(' ') });
+  ok('tirar o quadro some com o recado', !(await emit(leo, 'mapa:estado')).mapa.recados['1,0']);
   leo.emit('voz:sair');
   ana.emit('voz:sair');
   await espera(200);

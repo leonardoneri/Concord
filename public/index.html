@@ -173,6 +173,12 @@
                   <button type="button" data-ferramenta="retangulo">Retângulo</button>
                 </div>
                 <div id="paleta-mapa"></div>
+                <div id="linha-portal" hidden>
+                  <p class="dica-cfg" id="portal-sel"></p>
+                  <select id="destino-portal" title="Pra onde o portal leva"></select>
+                  <p class="dica-cfg" id="chegada-portal"></p>
+                  <button type="button" class="btn-secundario" id="btn-chegada-portal">Escolher onde chega</button>
+                </div>
                 <label id="linha-area-mapa" hidden>Nome da área
                   <input id="nome-area-mapa" maxlength="24" placeholder="Ex.: Sala de reunião" autocomplete="off">
                 </label>
@@ -387,8 +393,6 @@
           <input placeholder="Nome da sala" maxlength="32" required>
           <select id="mapa-nova-sala" title="Mapa em pixel art: cada um anda com um boneco e ouve mais alto quem está perto">
             <option value="">Sem mapa</option>
-            <option value="casa">Com mapa: Casa</option>
-            <option value="gramado">Com mapa: Gramado vazio</option>
           </select>
           <button class="btn-primario">Criar</button>
         </form>
@@ -499,6 +503,16 @@
     </form>
     <button type="button" class="menu-botao" id="btn-novo-som">+ Adicionar som do servidor</button>
   </div>
+  <form id="painel-recado" class="popover" hidden>
+    <h3>📌 Quadro de recados</h3>
+    <p id="recado-atual"></p>
+    <p class="dica-cfg" id="recado-por"></p>
+    <textarea id="recado-texto" maxlength="300" rows="3" placeholder="Escreva um recado pra galera (substitui o de agora)"></textarea>
+    <div class="acoes-som">
+      <button type="button" class="btn-secundario" id="btn-apagar-recado">Apagar</button>
+      <button class="btn-primario">Salvar recado</button>
+    </div>
+  </form>
   <div id="painel-boneco" class="popover" hidden>
     <h3>Meu boneco</h3>
     <canvas id="previa-boneco" width="48" height="20"></canvas>

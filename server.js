@@ -142,10 +142,15 @@ function criarLimitador() {
 // ---------- mapa da chamada (sala pixel art com áudio por proximidade) ----------
 const MAPA_MAX = 64; // tamanho máximo do mapa em tiles (o desenho fica no app)
 // O mapa de um canal de voz: 3 camadas de texto, uma letra por tile (o app sabe desenhar cada uma)
-//   chao = piso/parede, obj = móveis (' ' = nada), efe = efeitos: X bloqueia, N nasce, P palco, 1-9 área fechada
-const MAPA_CHAO = new Set(',*:~#._=+');
-const MAPA_OBJ = new Set(' TSVMhPLAQGFBbod');
-const MAPA_EFE = new Set(' XNP123456789');
+//   chao = piso/parede, obj = móveis (' ' = nada), efe = efeitos: X bloqueia, N nasce, P palco, O portal, 1-9 área fechada
+// portais: "x,y" -> { canal (0 = a própria sala), x, y (onde chega; null = num ponto de nascer) }
+// recados: "x,y" de um quadro (R) -> { texto, por, em }; quem escreve é qualquer um da sala (mapa:recado)
+const MAPA_CHAO = new Set(',*:~#._=+akel');
+const MAPA_OBJ = new Set(' TSVMhPLAQGFBbodCKRUYzkDE');
+const MAPA_EFE = new Set(' XNPO123456789');
+const MAX_PORTAIS = 64;
+const MAX_RECADO = 300;
+const tileDaChave = (k) => (/^\d{1,2},\d{1,2}$/.test(k) ? k.split(',').map(Number) : null);
 function limparMapa(m) {
   if (typeof m !== 'object' || m === null) return null;
   const l = Number(m.l);
@@ -161,7 +166,28 @@ function limparMapa(m) {
   for (const [k, v] of Object.entries(typeof m.areas === 'object' && m.areas ? m.areas : {})) {
     if (/^[1-9]$/.test(k)) areas[k] = String(v ?? '').replace(/[\p{C}]/gu, '').trim().slice(0, 24);
   }
-  return { l, a, chao, obj, efe, areas };
+  // portal só vale em cima de um tile O
+  const portais = {};
+  for (const [k, v] of Object.entries(typeof m.portais === 'object' && m.portais ? m.portais : {}).slice(0, MAX_PORTAIS)) {
+    const t = tileDaChave(k);
+    if (!t || efe[t[1]]?.[t[0]] !== 'O' || typeof v !== 'object' || v === null) continue;
+    const canal = Number(v.canal);
+    if (!Number.isInteger(canal) || canal < 0) continue;
+    const ponto = (n) => (Number.isFinite(Number(n)) && n !== null && Number(n) >= 0 && Number(n) <= MAPA_MAX ? Number(n) : null);
+    const x = ponto(v.x);
+    const y = ponto(v.y);
+    portais[k] = { canal, x: x != null && y != null ? x : null, y: x != null && y != null ? y : null };
+  }
+  return { l, a, chao, obj, efe, areas, portais, recados: {} };
+}
+// recados que continuam valendo: só os que estão em cima de um quadro
+function recadosQueFicam(recados, mapa) {
+  const ficam = {};
+  for (const [k, v] of Object.entries(recados ?? {})) {
+    const t = tileDaChave(k);
+    if (t && mapa.obj[t[1]]?.[t[0]] === 'R') ficam[k] = v;
+  }
+  return ficam;
 }
 // opções do boneco: quantas escolhas tem cada parte
 const BONECO = { pele: 6, cabelo: 6, corCabelo: 8, roupa: 10, calca: 5 };
@@ -1947,7 +1973,23 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (!podeConstruir(c.servidor, u.conta)) return ack({ erro: 'Só admin ou quem tem cargo de construtor edita o mapa' });
       const limpo = limparMapa(mapa);
       if (!limpo) return ack({ erro: 'Mapa inválido' });
+      // os recados são da galera: o editor não mexe neles (só somem se o quadro sumir)
+      limpo.recados = recadosQueFicam(mapaDoCanal(c.id).recados, limpo);
       mudouMapa(c.id, limpo, false);
+      ack({});
+    });
+    // quadro de recados: qualquer um da sala escreve (texto vazio apaga)
+    quando('mapa:recado', (u, { x, y, texto } = {}, ack) => {
+      const atual = u.voz != null && mapaDoCanal(u.voz);
+      if (!atual) return ack({ erro: 'Essa sala não tem mapa' });
+      x = Number(x);
+      y = Number(y);
+      if (atual.obj[y]?.[x] !== 'R') return ack({ erro: 'Não tem quadro aí' });
+      texto = String(texto ?? '').replace(/[^\P{C}\n]/gu, '').trim().slice(0, MAX_RECADO);
+      const recados = { ...atual.recados };
+      if (texto) recados[`${x},${y}`] = { texto, por: u.nome, em: Date.now() };
+      else delete recados[`${x},${y}`];
+      mudouMapa(u.voz, { ...atual, recados }, false);
       ack({});
     });
     quando('mapa:estado', (u, _, ack) => ack(u.voz != null ? mapaPara(u, mapaPublico(u.voz)) : null));

@@ -1585,3 +1585,13 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .acoes-editor { display: flex; gap: 6px; margin-top: auto; }
 .acoes-editor .btn-primario { margin-left: auto; }
 .acoes-editor button:disabled { opacity: .5; cursor: default; }
+#linha-portal { display: grid; gap: 6px; }
+#linha-portal[hidden] { display: none; }
+#linha-portal p { margin: 0; font-size: 12px; }
+#destino-portal { padding: 6px 8px; background: #1e1f22; border-radius: 4px; }
+#painel-recado { position: fixed; width: min(360px, calc(100vw - 16px)); padding: 12px; display: grid; gap: 8px; }
+#painel-recado h3 { margin: 0; font-size: 16px; color: var(--forte); }
+#recado-atual { margin: 0; padding: 10px 12px; border-radius: 6px; background: #f2e8b0; color: #3a3220; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+#recado-atual.vazio { background: #2b2d31; color: var(--texto-2); font-style: italic; }
+#recado-por { margin: 0; font-size: 12px; }
+#recado-texto { resize: vertical; padding: 8px; background: #1e1f22; }

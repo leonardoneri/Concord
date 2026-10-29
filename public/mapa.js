@@ -4,15 +4,23 @@
 
 const T = 16; // pixels de um tile no desenho (a tela amplia 2x a 4x)
 // O mapa tem 3 camadas, uma letra por tile (igual ao servidor):
-//   chao = piso e parede, obj = móveis (' ' = nada), efe = efeitos (X bloqueia, N nasce, P palco, 1-9 área fechada)
-const NOMES_CHAO = { ',': 'Grama', '*': 'Flores', ':': 'Caminho', '~': 'Água', '#': 'Parede', '.': 'Madeira', _: 'Azulejo', '=': 'Tapete', '+': 'Porta' };
-const NOMES_OBJ = {
-  T: 'Árvore', S: 'Sofá', V: 'TV', M: 'Mesa', h: 'Cadeira', P: 'Planta', L: 'Estante', A: 'Fliperama',
-  Q: 'Sinuca', G: 'Geladeira', F: 'Fogão', B: 'Balcão', b: 'Banco', o: 'Fogueira', d: 'Puff',
+//   chao = piso e parede, obj = móveis (' ' = nada), efe = efeitos (X bloqueia, N nasce, P palco, O portal, 1-9 área fechada)
+// e mais: portais ("x,y" -> { canal, x, y }) e recados dos quadros ("x,y" -> { texto, por, em })
+const NOMES_CHAO = {
+  ',': 'Grama', '*': 'Flores', ':': 'Caminho', a: 'Areia', '~': 'Água', '#': 'Parede', '.': 'Madeira', e: 'Piso escuro',
+  _: 'Azulejo', '=': 'Tapete', k: 'Carpete', l: 'Pista de dança', '+': 'Porta',
 };
-const NOMES_EFE = { X: 'Bloqueio', N: 'Nascer', P: 'Palco', ...Object.fromEntries([...'123456789'].map((n) => [n, `Área ${n}`])) };
+const NOMES_OBJ = {
+  T: 'Árvore', Y: 'Coqueiro', S: 'Sofá', V: 'TV (tecla E: assistir junto)', M: 'Mesa', h: 'Cadeira', P: 'Planta', L: 'Estante',
+  R: 'Quadro de recados (tecla E)', A: 'Fliperama', Q: 'Sinuca', D: 'Alvo de dardos', C: 'Computador', K: 'Cadeira gamer',
+  G: 'Geladeira', F: 'Fogão', B: 'Balcão', k: 'Banquinho', E: 'Caixa de som', b: 'Banco', o: 'Fogueira', d: 'Puff',
+  U: 'Guarda-sol', z: 'Espreguiçadeira',
+};
+const NOMES_EFE = { X: 'Bloqueio', N: 'Nascer', P: 'Palco', O: 'Portal', ...Object.fromEntries([...'123456789'].map((n) => [n, `Área ${n}`])) };
 const BLOQ_CHAO = new Set('#~');
-const BLOQ_OBJ = new Set('TSVMPLAQGFBbo');
+const BLOQ_OBJ = new Set('TYSVMPLRAQDCGFBEboU');
+// objetos que fazem alguma coisa com a tecla E
+const INTERATIVOS = { V: 'Assistir junto', R: 'Quadro de recados' };
 const PERTO = 2.5; // até aqui (em tiles) ouve com volume cheio
 const LONGE = 7; // daqui pra frente não ouve mais
 const VELOCIDADE = 5; // tiles por segundo
@@ -80,7 +88,7 @@ function modeloCasa() {
     obj.push(lo);
     efe.push(le);
   }
-  return { l, a, chao, obj, efe, areas: { 1: 'Sala de reunião', 2: 'Fogueira' } };
+  return { l, a, chao, obj, efe, areas: { 1: 'Sala de reunião', 2: 'Fogueira' }, portais: {}, recados: {} };
 }
 function modeloGramado() {
   const l = 30;
@@ -93,10 +101,131 @@ function modeloGramado() {
     chao: linhas(() => ','),
     obj: linhas((x, y) => (borda(x, y) ? 'T' : ' ')),
     efe: linhas((x, y) => (meio(x, y) ? 'N' : ' ')),
-    areas: {},
+    areas: {}, portais: {}, recados: {},
   };
 }
-const MODELOS_MAPA = { casa: { nome: 'Casa', criar: modeloCasa }, gramado: { nome: 'Gramado vazio', criar: modeloGramado } };
+// ajudante pros modelos: começa tudo com um piso e vai pondo retângulos
+function construir(l, a, piso) {
+  const g = { chao: [], obj: [], efe: [] };
+  for (const [c, v] of [['chao', piso], ['obj', ' '], ['efe', ' ']]) g[c] = Array.from({ length: a }, () => Array(l).fill(v));
+  const ret = (camada, x0, y0, x1, y1, ch) => {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) g[camada][y][x] = ch;
+  };
+  const fim = (areas = {}) => ({
+    l, a, chao: g.chao.map((r) => r.join('')), obj: g.obj.map((r) => r.join('')), efe: g.efe.map((r) => r.join('')),
+    areas, portais: {}, recados: {},
+  });
+  return { g, ret, fim };
+}
+function paredes(ret, x0, y0, x1, y1) {
+  ret('chao', x0, y0, x1, y0, '#');
+  ret('chao', x0, y1, x1, y1, '#');
+  ret('chao', x0, y0, x0, y1, '#');
+  ret('chao', x1, y0, x1, y1, '#');
+}
+function modeloLan() {
+  const { g, ret, fim } = construir(32, 22, 'k');
+  paredes(ret, 0, 0, 31, 21);
+  ret('chao', 14, 21, 15, 21, '+');
+  for (const y of [3, 7, 11]) {
+    for (const [x0, x1] of [[2, 12], [18, 29]]) {
+      ret('obj', x0, y, x1, y, 'C');
+      ret('obj', x0, y + 1, x1, y + 1, 'K');
+    }
+  }
+  ret('obj', 14, 1, 15, 1, 'V');
+  g.obj[1][17] = 'R';
+  g.obj[1][1] = 'P';
+  g.obj[1][30] = 'P';
+  // canto do lanche
+  ret('obj', 2, 15, 6, 15, 'B');
+  g.obj[15][7] = 'G';
+  ret('obj', 2, 19, 5, 19, 'S');
+  ret('obj', 7, 19, 8, 19, 'd');
+  ret('obj', 10, 15, 12, 15, 'A');
+  // sala do squad (fechada)
+  ret('chao', 18, 13, 30, 13, '#');
+  ret('chao', 18, 13, 18, 20, '#');
+  g.chao[13][24] = '+';
+  ret('chao', 21, 15, 28, 19, '=');
+  ret('obj', 22, 16, 27, 18, 'M');
+  ret('obj', 22, 15, 27, 15, 'h');
+  ret('obj', 22, 19, 27, 19, 'h');
+  g.obj[14][30] = 'R';
+  ret('efe', 19, 14, 30, 20, '1');
+  ret('efe', 13, 19, 16, 20, 'N');
+  return fim({ 1: 'Sala do squad' });
+}
+function modeloBar() {
+  const { g, ret, fim } = construir(30, 20, 'e');
+  paredes(ret, 0, 0, 29, 19);
+  ret('chao', 14, 19, 15, 19, '+');
+  // balcão com banquinhos
+  ret('obj', 3, 3, 14, 3, 'B');
+  for (let x = 3; x <= 14; x += 2) g.obj[4][x] = 'k';
+  ret('obj', 3, 1, 4, 1, 'G');
+  ret('obj', 6, 1, 9, 1, 'L');
+  ret('obj', 11, 1, 12, 1, 'V');
+  // pista e palco
+  ret('chao', 18, 3, 27, 9, 'l');
+  ret('chao', 20, 1, 25, 2, '=');
+  ret('efe', 20, 1, 25, 2, 'P');
+  g.obj[1][18] = 'E';
+  g.obj[1][27] = 'E';
+  // mesinhas
+  for (const [x, y] of [[5, 9], [10, 9], [5, 13], [10, 13]]) {
+    g.obj[y][x] = 'M';
+    g.obj[y][x - 1] = 'h';
+    g.obj[y][x + 1] = 'h';
+  }
+  ret('obj', 16, 12, 18, 13, 'Q');
+  g.obj[10][28] = 'D';
+  g.obj[16][1] = 'R';
+  g.obj[1][1] = 'P';
+  g.obj[18][28] = 'P';
+  // cantinho VIP (fechado)
+  ret('chao', 22, 14, 28, 17, '=');
+  ret('obj', 23, 14, 27, 14, 'S');
+  ret('obj', 24, 16, 26, 16, 'M');
+  ret('efe', 21, 13, 28, 18, '1');
+  ret('efe', 13, 17, 16, 18, 'N');
+  return fim({ 1: 'Cantinho VIP' });
+}
+function modeloPraia() {
+  const { g, ret, fim } = construir(40, 24, 'a');
+  ret('chao', 0, 0, 39, 4, '~');
+  ret('chao', 0, 5, 39, 5, '~');
+  for (let x = 0; x < 40; x += 3) g.chao[5][x] = 'a';
+  ret('chao', 19, 12, 20, 23, ':');
+  for (const [x, y] of [[3, 8], [12, 7], [26, 8], [35, 7], [2, 21], [37, 21], [15, 22], [24, 22], [33, 12]]) g.obj[y][x] = 'Y';
+  for (const [x, y] of [[8, 9], [16, 10], [23, 10], [31, 9]]) {
+    g.obj[y][x] = 'U';
+    g.obj[y + 1][x - 1] = 'z';
+    g.obj[y + 1][x + 1] = 'z';
+  }
+  // quiosque
+  ret('chao', 2, 14, 10, 19, 'e');
+  ret('obj', 3, 15, 9, 15, 'B');
+  for (let x = 3; x <= 9; x += 2) g.obj[16][x] = 'k';
+  g.obj[14][2] = 'G';
+  g.obj[14][10] = 'E';
+  g.obj[13][21] = 'R';
+  // luau (fechado)
+  g.obj[16][31] = 'o';
+  for (const [x, y] of [[30, 15], [32, 15], [30, 17], [32, 17]]) g.obj[y][x] = 'b';
+  ret('efe', 28, 13, 34, 19, '1');
+  ret('efe', 18, 20, 21, 21, 'N');
+  return fim({ 1: 'Luau' });
+}
+const MODELOS_MAPA = {
+  casa: { nome: 'Casa', criar: modeloCasa },
+  lan: { nome: 'Lan house', criar: modeloLan },
+  bar: { nome: 'Bar', criar: modeloBar },
+  praia: { nome: 'Praia', criar: modeloPraia },
+  gramado: { nome: 'Gramado vazio', criar: modeloGramado },
+};
+// opções do "criar sala" nas configurações do servidor
+$('#mapa-nova-sala').append(...Object.entries(MODELOS_MAPA).map(([k, m]) => Object.assign(el('option', null, `Com mapa: ${m.nome}`), { value: k })));
 
 // ---------- o mapa aberto ----------
 let atual = null; // o mapa que está na tela (o da sala, ou o rascunho do editor)
@@ -150,6 +279,29 @@ function pintarChao(c, m, ch, tx, ty) {
         p('#cbbfa6', sx, sy, 4, 1);
       }
       break;
+    case 'a':
+      p('#e6d29a', 0, 0, 16, 16);
+      for (let i = 0; i < 6; i++) p(r(i) > 0.5 ? '#d6be82' : '#f2e2b4', (r(i + 10) * 15) | 0, (r(i + 20) * 15) | 0);
+      break;
+    case 'k':
+      p('#2c3a6a', 0, 0, 16, 16);
+      for (let y = 1; y < 16; y += 4) for (let x = (y % 8 === 1 ? 1 : 3); x < 16; x += 4) p('#36457a', x, y);
+      break;
+    case 'e':
+      p('#5a3a26', 0, 0, 16, 16);
+      for (let k = 0; k < 4; k++) {
+        p('#694530', 0, k * 4, 16, 1);
+        p('#46301f', 0, k * 4 + 3, 16, 1);
+        p('#46301f', (r(k) * 16) | 0, k * 4, 1, 3);
+      }
+      break;
+    case 'l': {
+      const cores = ['#a8306a', '#305aa8', '#a89030', '#30a86a'];
+      for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) p(cores[(tx * 2 + i + (ty * 2 + j) * 3) % 4], i * 8, j * 8, 8, 8);
+      p('rgba(0,0,0,.25)', 7, 0, 2, 16);
+      p('rgba(0,0,0,.25)', 0, 7, 16, 2);
+      break;
+    }
     case '~':
       p('#3a7fc2', 0, 0, 16, 16);
       p('#3373b2', 0, 10, 16, 6);
@@ -351,6 +503,104 @@ function pintarObj(c, m, ch, tx, ty) {
       p('#d89a3a', 2, 4, 12, 8);
       p('#e8b45a', 4, 5, 6, 3);
       break;
+    case 'C': // computador na mesa
+      p('#2a2a32', 0, 6, 16, 9);
+      p('#3c3c48', 0, 6, 16, 6);
+      p('#16161e', 3, 0, 10, 7);
+      p('#2a5ec8', 4, 1, 8, 5);
+      p('#16161e', 7, 7, 2, 1);
+      p('#5a5a66', 3, 9, 8, 2);
+      p('#7a7a86', 12, 9, 2, 2);
+      break;
+    case 'K': // cadeira gamer
+      p('rgba(0,0,0,.2)', 3, 13, 10, 2);
+      p('#1e1e26', 3, 3, 10, 10);
+      p('#d83a3a', 5, 5, 6, 6);
+      p('#1e1e26', 3, 10, 10, 5);
+      p('#d83a3a', 7, 11, 2, 3);
+      break;
+    case 'R': { // quadro de recados (com papel a mais quando tem recado)
+      p('#4e301b', 3, 11, 2, 4);
+      p('#4e301b', 11, 11, 2, 4);
+      p('#6a4428', 1, 1, 14, 11);
+      p('#c89a5a', 2, 2, 12, 9);
+      p('#f2f2f2', 3, 3, 4, 3);
+      p('#d83a3a', 4, 3, 1, 1);
+      if (m.recados?.[`${tx},${ty}`]) {
+        p('#f2e270', 8, 3, 5, 5);
+        p('#8a7a30', 9, 4, 3, 1);
+        p('#8a7a30', 9, 6, 2, 1);
+        p('#d83a3a', 10, 3, 1, 1);
+      } else {
+        p('#e8e0d0', 9, 5, 3, 3);
+      }
+      break;
+    }
+    case 'U': // guarda-sol (a lona fica por cima, em pintarCopa)
+      p('rgba(0,0,0,.18)', 1, 9, 14, 6);
+      p('#d8d8d8', 7, 2, 2, 13);
+      break;
+    case 'Y': // coqueiro (as folhas ficam por cima)
+      p('rgba(0,0,0,.2)', 3, 12, 10, 3);
+      for (let i = 0; i < 5; i++) {
+        p('#8a6238', 6 + (i < 2 ? 1 : 0), 2 + i * 3, 4, 3);
+        p('#6b4a2a', 6 + (i < 2 ? 1 : 0), 4 + i * 3, 4, 1);
+      }
+      break;
+    case 'z': // espreguiçadeira
+      p('rgba(0,0,0,.15)', 3, 3, 11, 13);
+      p('#e8e8e8', 3, 1, 10, 14);
+      for (const y of [4, 8, 12]) p('#3a8ad8', 3, y, 10, 2);
+      p('#d0d0d0', 3, 1, 10, 3);
+      break;
+    case 'k': // banquinho
+      p('rgba(0,0,0,.2)', 4, 12, 8, 2);
+      p('#4e301b', 7, 9, 2, 4);
+      p('#a83a2e', 4, 4, 8, 6);
+      p('#d85a4a', 5, 5, 4, 2);
+      break;
+    case 'D': // alvo de dardos
+      p('#3a2a1a', 7, 11, 2, 4);
+      p('#1e1e1e', 3, 1, 10, 10);
+      p('#e8d8b0', 4, 2, 8, 8);
+      p('#d83a3a', 5, 3, 6, 6);
+      p('#1e1e1e', 6, 4, 4, 4);
+      p('#d83a3a', 7, 5, 2, 2);
+      break;
+    case 'E': // caixa de som
+      p('rgba(0,0,0,.25)', 3, 13, 10, 2);
+      p('#1e1e24', 3, 1, 10, 14);
+      p('#3a3a44', 5, 3, 6, 6);
+      p('#111', 6, 4, 4, 4);
+      p('#3a3a44', 6, 10, 4, 4);
+      p('#111', 7, 11, 2, 2);
+      break;
+  }
+}
+
+// lona do guarda-sol e folhas do coqueiro: por cima dos bonecos, igual à copa da árvore
+function pintarAlto(c, o, tx, ty) {
+  const X = tx * T;
+  const Y = ty * T;
+  const p = (cor, x, y, w = 1, h = 1) => { c.fillStyle = cor; c.fillRect(X + x, Y + y, w, h); };
+  if (o === 'U') {
+    for (let y = -7; y <= 2; y++) {
+      const hw = Math.round(Math.sqrt(Math.max(0, 81 - (y + 2) * (y + 2) * 2.2)));
+      for (let x = 8 - hw; x < 8 + hw; x++) p(Math.floor((x - 8 + 16) / 3) % 2 ? '#e84a4a' : '#f4f1e8', x, y, 1, 1);
+    }
+    p('#b83030', 7, -8, 2, 2);
+  } else if (o === 'Y') {
+    const folha = (dx, dy, w) => {
+      for (let i = 0; i < w; i++) p(i % 2 ? '#3a9a48' : '#2f7a3a', 8 + Math.sign(dx) * i - (dx < 0 ? 1 : 0), 1 + dy + Math.floor(i * Math.abs(dy) / w), 1, 2);
+    };
+    p('#1d4a24', 4, -2, 8, 5);
+    p('#2f7a3a', 5, -1, 6, 3);
+    folha(1, 3, 9);
+    folha(-1, 3, 9);
+    folha(1, -2, 8);
+    folha(-1, -2, 8);
+    p('#5cbc62', 6, -1, 2, 1);
+    p('#7a4a2a', 7, 2, 2, 2);
   }
 }
 
@@ -398,8 +648,10 @@ function prepararMapa() {
       pintarChao(b, m, ch, x, y);
       if (o !== ' ') pintarObj(b, m, o, x, y);
       if (o === 'T') pintarCopa(t, x, y);
-      if (ch === '~') animados.push({ ch, x, y });
-      if (o === 'o' || o === 'A') animados.push({ ch: o, x, y });
+      if (o === 'U' || o === 'Y') pintarAlto(t, o, x, y);
+      if (ch === '~' || ch === 'l') animados.push({ ch, x, y });
+      if ('oAVCE'.includes(o)) animados.push({ ch: o, x, y });
+      if (e === 'O') animados.push({ ch: 'portal', x, y });
       if (/[1-9]/.test(e)) {
         const cx = caixasAreas[e] ??= { x0: x, y0: y, x1: x, y1: y };
         Object.assign(cx, { x0: Math.min(cx.x0, x), y0: Math.min(cx.y0, y), x1: Math.max(cx.x1, x), y1: Math.max(cx.y1, y) });
@@ -424,6 +676,42 @@ function pintarAnimados(c, t) {
         c.fillRect(X + 2 + ((rnd(x, y, i + 3) * 9) | 0), Y + 3 + i * 6, 4, 1);
       }
       c.globalAlpha = 1;
+    } else if (ch === 'portal') {
+      // redemoinho roxo
+      c.globalAlpha = 0.85;
+      for (let i = 0; i < 3; i++) {
+        const ang = t * 3 + (i * Math.PI * 2) / 3;
+        c.fillStyle = ['#b07aff', '#7a4aff', '#e0c8ff'][i];
+        c.fillRect(X + 7 + Math.round(Math.cos(ang) * 5), Y + 7 + Math.round(Math.sin(ang) * 4), 2, 2);
+      }
+      c.fillStyle = 'rgba(160,110,255,.35)';
+      c.fillRect(X + 3, Y + 4, 10, 8);
+      c.fillRect(X + 4, Y + 3, 8, 10);
+      c.globalAlpha = 1;
+    } else if (ch === 'l') {
+      // luzes da pista piscando
+      if ((Math.floor(t * 3) + x + y) % 4 === 0) {
+        c.fillStyle = 'rgba(255,255,255,.18)';
+        c.fillRect(X, Y, T, T);
+      }
+    } else if (ch === 'V') {
+      // TV ligada quando tem vídeo no "assistir junto"
+      if (!estado.assistir) continue;
+      c.fillStyle = `hsl(${(t * 40 + x * 30) % 360} 60% 45%)`;
+      c.fillRect(X + 1, Y + 2, 14, 7);
+      c.fillStyle = 'rgba(255,255,255,.35)';
+      c.fillRect(X + 2 + (Math.floor(t * 6) % 10), Y + 3, 2, 5);
+    } else if (ch === 'C') {
+      c.fillStyle = (Math.floor(t * 2) + x) % 3 ? '#2a5ec8' : '#3a8a5a';
+      c.fillRect(X + 4, Y + 1, 8, 5);
+      c.fillStyle = '#e8e8f0';
+      c.fillRect(X + 5, Y + 2 + (Math.floor(t * 5 + x) % 3), 4, 1);
+    } else if (ch === 'E') {
+      const pulso = Math.floor(t * 4) % 2;
+      c.fillStyle = '#5a5a66';
+      c.fillRect(X + 6 - pulso, Y + 4 - pulso, 4 + pulso * 2, 4 + pulso * 2);
+      c.fillStyle = '#111';
+      c.fillRect(X + 7, Y + 5, 2, 2);
     } else if (ch === 'o') {
       const f = Math.floor(t * 8) % 3;
       c.fillStyle = '#d8401e';
@@ -579,7 +867,7 @@ function sprite(b, dir, quadro) {
 // id -> { x, y (o que aparece), alvoX, alvoY (o último que chegou), dir, anda, boneco, emote }
 const pessoasMapa = new Map();
 const mapa = {
-  rodando: false, ultimo: 0, teclas: new Set(), caminho: null, destino: null, chave: '',
+  rodando: false, ultimo: 0, teclas: new Set(), caminho: null, destino: null, chave: '', noPortal: false, chegada: null,
   enviado: null, enviadoEm: 0, fatores: new Map(), pertoChave: '', escala: 3, travado: 0, cam: null,
 };
 const naChamadaMapa = (id) => estado.usuarios.some((u) => u.id === id && u.voz === estado.voz);
@@ -674,6 +962,7 @@ function aplicarMapa(dados) {
     if (editor) fecharEditor();
     atual = null;
     mapaBase = null;
+    $('#painel-recado').hidden = true;
     if (antes) foco = null;
     $('#painel-boneco').hidden = true;
     renderGrid();
@@ -713,10 +1002,11 @@ function aplicarMapa(dados) {
     eu = null;
   }
   if (!eu) {
-    const pos = lugarParaNascer();
+    // veio por um portal que diz onde chega? senão, num ponto de nascer
+    const pos = mapa.chegada && livre(mapa.chegada.x, mapa.chegada.y) ? mapa.chegada : lugarParaNascer();
     eu = { ...pos, alvoX: pos.x, alvoY: pos.y, dir: 'baixo', anda: false, boneco: meuBonecoAgora(), emote: null };
     pessoasMapa.set(estado.eu.id, eu);
-    mapa.caminho = mapa.destino = null;
+    Object.assign(mapa, { caminho: null, destino: null, chegada: null, noPortal: efeitoNoPe(eu) === 'O' });
   }
   // o servidor ainda não sabe de mim (entrei agora, reconectei ou o mapa mudou): mando onde estou
   if (!vistos.has(estado.eu.id) || !livre(eu.x, eu.y)) {
@@ -724,6 +1014,7 @@ function aplicarMapa(dados) {
     enviarPosicao(true);
   }
   $('#btn-editar-mapa').hidden = !dados.podeEditar || !!editor;
+  renderRecado();
   iniciarLoopMapa();
   renderGrid();
   verificarProximidade();
@@ -783,6 +1074,10 @@ window.addEventListener('keydown', (e) => {
   }
   const n = /^Digit([1-5])$/.exec(e.code)?.[1];
   if (n && !e.repeat && !editor) mandarEmote(EMOTES_MAPA[n - 1]);
+  if (e.code === 'KeyE' && !e.repeat && !editor) {
+    e.preventDefault();
+    interagir();
+  }
 });
 window.addEventListener('keyup', (e) => {
   const dir = TECLAS_MAPA[e.code];
@@ -861,6 +1156,12 @@ function andar(dt) {
   }
   eu.alvoX = eu.x;
   eu.alvoY = eu.y;
+  // pisou num portal (só conta de novo depois de sair dele)
+  if (efeitoNoPe(eu) !== 'O') mapa.noPortal = false;
+  else if (!mapa.noPortal && !editor) {
+    mapa.noPortal = true;
+    usarPortal(Math.floor(eu.x), Math.floor(eu.y - 0.1));
+  }
   if (anda !== eu.anda) {
     eu.anda = anda;
     enviarPosicao(true);
@@ -868,6 +1169,92 @@ function andar(dt) {
     enviarPosicao();
   }
 }
+
+function usarPortal(x, y) {
+  const p = atual.portais?.[`${x},${y}`];
+  if (!p) return;
+  if (!p.canal || p.canal === estado.voz) {
+    if (p.x == null) return avisar('Esse portal ainda não tem destino.');
+    const eu = pessoasMapa.get(estado.eu.id);
+    Object.assign(eu, { x: p.x + 0.5, y: p.y + 0.65, alvoX: p.x + 0.5, alvoY: p.y + 0.65 });
+    mapa.caminho = mapa.destino = null;
+    mapa.noPortal = efeitoNoPe(eu) === 'O';
+    som('entrar');
+    return enviarPosicao(true);
+  }
+  const sala = estado.canaisVoz.find((c) => c.id === p.canal);
+  if (!sala) return avisar('A sala desse portal não existe mais (ou é de outro servidor que não está aberto).');
+  if (!sala.mapa) return avisar(`A sala "${sala.nome}" não tem mapa.`);
+  mapa.chegada = p.x != null ? { x: p.x + 0.5, y: p.y + 0.65 } : null;
+  entrarVoz(sala.id);
+}
+
+// objeto com tecla E pertinho de mim
+function objetoPerto() {
+  const eu = pessoasMapa.get(estado.eu?.id);
+  if (!eu || editor || !atual) return null;
+  const fx = Math.floor(eu.x);
+  const fy = Math.floor(eu.y - 0.1);
+  let melhor = null;
+  for (let dy = -2; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const o = objEm(atual, fx + dx, fy + dy);
+      if (!(o in INTERATIVOS)) continue;
+      const d = Math.hypot(fx + dx + 0.5 - eu.x, fy + dy + 0.5 - (eu.y - 0.3));
+      if (d < 1.7 && (!melhor || d < melhor.d)) melhor = { o, x: fx + dx, y: fy + dy, d };
+    }
+  }
+  return melhor;
+}
+function interagir() {
+  const alvo = objetoPerto();
+  if (!alvo) return;
+  if (alvo.o === 'V') {
+    if (estado.assistir) {
+      foco = 'assistir';
+      return renderGrid();
+    }
+    return abrirAssistir();
+  }
+  if (alvo.o === 'R') abrirRecado(alvo.x, alvo.y);
+}
+
+// ---------- quadro de recados ----------
+let recadoAberto = null; // "x,y" do quadro aberto
+function abrirRecado(x, y) {
+  fecharPopovers();
+  recadoAberto = `${x},${y}`;
+  renderRecado(true);
+  const painel = $('#painel-recado');
+  painel.hidden = false;
+  const r = $('#tela-mapa').getBoundingClientRect();
+  const caixa = painel.getBoundingClientRect();
+  painel.style.left = `${Math.max(8, r.left + r.width / 2 - caixa.width / 2)}px`;
+  painel.style.top = `${Math.max(8, r.top + r.height / 2 - caixa.height / 2)}px`;
+  $('#recado-texto').focus();
+}
+function renderRecado(preencher = false) {
+  if (!recadoAberto || $('#painel-recado').hidden && !preencher) return;
+  const rec = estado.mapa?.mapa.recados?.[recadoAberto];
+  $('#recado-atual').textContent = rec?.texto ?? 'Ninguém escreveu nada ainda.';
+  $('#recado-atual').classList.toggle('vazio', !rec);
+  $('#recado-por').textContent = rec ? `${rec.por} · ${new Date(rec.em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}` : '';
+  $('#btn-apagar-recado').hidden = !rec;
+  if (preencher) $('#recado-texto').value = rec?.texto ?? '';
+}
+function mandarRecado(texto) {
+  const [x, y] = recadoAberto.split(',').map(Number);
+  socket.emit('mapa:recado', { x, y, texto }, (r) => {
+    if (r?.erro) return avisar(r.erro);
+    $('#painel-recado').hidden = true;
+    $('#tela-mapa').focus();
+  });
+}
+$('#painel-recado').onsubmit = (e) => {
+  e.preventDefault();
+  mandarRecado($('#recado-texto').value);
+};
+$('#btn-apagar-recado').onclick = () => confirm('Apagar o recado desse quadro?') && mandarRecado('');
 
 // ---------- desenhar ----------
 function iniciarLoopMapa() {
@@ -1040,6 +1427,19 @@ function desenharMapa(t) {
       }
     }
   }
+  const perto = objetoPerto();
+  if (perto) {
+    const p = tela((perto.x + 0.5) * T, perto.y * T - 4);
+    const texto = `E  ${INTERATIVOS[perto.o]}`;
+    c.font = '700 12px "gg sans", "Segoe UI", system-ui, sans-serif';
+    const lw = c.measureText(texto).width + 14;
+    c.fillStyle = 'rgba(88,101,242,.92)';
+    c.beginPath();
+    c.roundRect(p.x - lw / 2, p.y - 11, lw, 20, 5);
+    c.fill();
+    c.fillStyle = '#fff';
+    c.fillText(texto, p.x, p.y);
+  }
   const aviso = $('#zona-mapa');
   const noPalco = eu && !editor && efeitoNoPe(eu) === 'P';
   aviso.hidden = !minhaArea && !noPalco;
@@ -1074,7 +1474,9 @@ $('#tela-mapa').addEventListener('contextmenu', (e) => editor && e.preventDefaul
 // editor = { mapa (rascunho), camada, pincel, ferramenta, historico, cam, zoom, pintando, ini, fim, salvando }
 let editor = null;
 const VAZIO = { chao: ',', obj: ' ', efe: ' ' };
-const copiaMapa = (m) => ({ ...m, chao: [...m.chao], obj: [...m.obj], efe: [...m.efe], areas: { ...m.areas } });
+const copiaMapa = (m) => ({
+  ...m, chao: [...m.chao], obj: [...m.obj], efe: [...m.efe], areas: { ...m.areas }, portais: { ...m.portais }, recados: { ...m.recados },
+});
 
 function abrirEditor() {
   if (!atual || editor) return;
@@ -1111,7 +1513,7 @@ function trocarTile(camada, x, y, letra) {
 }
 function guardarDesfazer() {
   const m = editor.mapa;
-  editor.historico.push({ l: m.l, a: m.a, chao: [...m.chao], obj: [...m.obj], efe: [...m.efe], areas: { ...m.areas } });
+  editor.historico.push({ l: m.l, a: m.a, chao: [...m.chao], obj: [...m.obj], efe: [...m.efe], areas: { ...m.areas }, portais: { ...m.portais } });
   if (editor.historico.length > 50) editor.historico.shift();
 }
 function desfazerEditor() {
@@ -1126,6 +1528,14 @@ function desfazerEditor() {
 function comecarPintura(e) {
   if (e.button !== 0 && e.button !== 2) return;
   e.preventDefault();
+  // escolhendo onde o portal da própria sala chega
+  if (editor.escolhendoChegada) {
+    const t = tileDoMouse(e);
+    editor.escolhendoChegada = false;
+    const p = editor.mapa.portais[editor.portalSel];
+    if (p && dentro(editor.mapa, t.x, t.y) && e.button === 0) Object.assign(p, { x: t.x, y: t.y });
+    return renderEditor();
+  }
   guardarDesfazer();
   const t = tileDoMouse(e);
   editor.pintando = { apagar: e.button === 2 };
@@ -1136,7 +1546,19 @@ function comecarPintura(e) {
 function pintarNoEditor(t) {
   const letra = editor.pintando.apagar ? VAZIO[editor.camada] : editor.pincel;
   if (trocarTile(editor.camada, t.x, t.y, letra)) mapaBase = null;
+  if (editor.camada !== 'efe' || !dentro(editor.mapa, t.x, t.y)) return;
+  const chave = `${t.x},${t.y}`;
+  if (letra !== 'O') {
+    delete editor.mapa.portais[chave];
+    return;
+  }
+  // portal novo: vai pra primeira outra sala com mapa (ou pra esta, e aí falta escolher onde chega)
+  editor.mapa.portais[chave] ??= { canal: salasParaPortal()[0]?.id ?? 0, x: null, y: null };
+  editor.portalSel = chave;
 }
+// salas com mapa do servidor da chamada (destino de portal)
+const salasParaPortal = () => (estado.servidor.id === estado.vozInfo?.servidorId
+  ? estado.canaisVoz.filter((c) => c.mapa && c.id !== estado.voz) : []);
 window.addEventListener('mousemove', (e) => {
   if (!editor?.pintando) return;
   const t = tileDoMouse(e);
@@ -1181,6 +1603,20 @@ function desenharEditor(c, mundo, tela, dpr) {
   c.stroke();
   c.strokeStyle = 'rgba(255,255,255,.5)';
   c.strokeRect(0, 0, m.l * T, m.a * T);
+  const sel = editor.portalSel && m.portais[editor.portalSel];
+  if (sel && editor.camada === 'efe') {
+    const [px, py] = editor.portalSel.split(',').map(Number);
+    c.strokeStyle = '#d0b0ff';
+    c.lineWidth = 2 / mapa.escala;
+    c.strokeRect(px * T, py * T, T, T);
+    if (!sel.canal && sel.x != null) {
+      c.beginPath();
+      c.moveTo((px + 0.5) * T, (py + 0.5) * T);
+      c.lineTo((sel.x + 0.5) * T, (sel.y + 0.5) * T);
+      c.stroke();
+      c.strokeRect(sel.x * T + 3, sel.y * T + 3, T - 6, T - 6);
+    }
+  }
   if (editor.pintando && editor.ferramenta === 'retangulo') {
     const { ini, fim } = editor;
     c.strokeStyle = editor.pintando.apagar ? '#ff6b6b' : '#fff';
@@ -1216,14 +1652,15 @@ function previaTile(camada, letra) {
     c.fillRect(0, 0, T, T);
     return cv;
   }
-  const chao = camada === 'chao' ? letra : 'Tbo'.includes(letra) ? ',' : '.';
+  const chao = camada === 'chao' ? letra : 'YUz'.includes(letra) ? 'a' : 'Tbo'.includes(letra) ? ',' : '.';
   const m = { l: 1, a: 1, chao: [chao], obj: [camada === 'obj' ? letra : ' '], efe: [' '] };
   pintarChao(c, m, chao, 0, 0);
   if (camada === 'obj') pintarObj(c, m, letra, 0, 0);
-  if (letra === 'T') {
+  if ('TUY'.includes(letra)) {
     c.save();
     c.translate(0, 8);
-    pintarCopa(c, 0, 0);
+    if (letra === 'T') pintarCopa(c, 0, 0);
+    else pintarAlto(c, letra, 0, 0);
     c.restore();
   }
   return cv;
@@ -1234,6 +1671,7 @@ const DICAS_EFE = {
   X: 'Ninguém passa (use pra fechar um buraco sem pôr parede)',
   N: 'Onde a galera aparece ao entrar',
   P: 'Quem pisa aqui é ouvido pela sala inteira',
+  O: 'Pisou, vai pra outro ponto desta sala ou pra outra sala com mapa',
 };
 function renderEditor() {
   if (!editor) return;
@@ -1261,6 +1699,7 @@ function renderEditor() {
   $('#dica-editor').textContent = editor.camada === 'efe'
     ? 'Áreas fechadas: quem está dentro só ouve quem está na mesma área. Pinte com o mesmo número.'
     : 'Clique e arraste pra pintar · botão direito apaga · WASD mexe a câmera · roda do mouse dá zoom · Ctrl+Z desfaz';
+  renderPortalEditor();
   if (document.activeElement !== $('#largura-mapa')) $('#largura-mapa').value = editor.mapa.l;
   if (document.activeElement !== $('#altura-mapa')) $('#altura-mapa').value = editor.mapa.a;
   $('#btn-desfazer-mapa').disabled = !editor.historico.length;
@@ -1278,6 +1717,37 @@ $$('#editor-mapa [data-ferramenta]').forEach((b) => (b.onclick = () => {
 $('#nome-area-mapa').oninput = (e) => {
   editor.mapa.areas[editor.pincel] = e.target.value.slice(0, 24);
 };
+// destino do portal escolhido (o último pintado ou clicado)
+function renderPortalEditor() {
+  const mostrar = editor.camada === 'efe' && editor.pincel === 'O';
+  $('#linha-portal').hidden = !mostrar;
+  if (!mostrar) return;
+  const p = editor.portalSel && editor.mapa.portais[editor.portalSel];
+  $('#portal-sel').textContent = p ? `Portal em ${editor.portalSel.replace(',', ', ')}` : 'Pinte um portal (ou clique num que já existe) pra escolher o destino.';
+  $('#destino-portal').hidden = !p;
+  $('#btn-chegada-portal').hidden = !p || !!p.canal;
+  if (!p) return;
+  const sel = $('#destino-portal');
+  sel.replaceChildren(Object.assign(el('option', null, 'Esta sala (um ponto daqui)'), { value: '0' }),
+    ...salasParaPortal().map((c) => Object.assign(el('option', null, `Sala: ${c.nome}`), { value: String(c.id) })));
+  if (p.canal && ![...sel.options].some((o) => o.value === String(p.canal))) {
+    sel.append(Object.assign(el('option', null, 'Outra sala (não encontrada)'), { value: String(p.canal) }));
+  }
+  sel.value = String(p.canal);
+  $('#chegada-portal').textContent = editor.escolhendoChegada ? 'Clique no mapa onde o portal deixa a pessoa…'
+    : p.canal ? 'Chega num ponto de nascer da outra sala.'
+      : p.x != null ? `Chega em ${p.x}, ${p.y}.` : '⚠ Falta escolher onde chega.';
+}
+$('#destino-portal').onchange = (e) => {
+  const p = editor.mapa.portais[editor.portalSel];
+  Object.assign(p, { canal: Number(e.target.value), x: null, y: null });
+  renderEditor();
+};
+$('#btn-chegada-portal').onclick = () => {
+  editor.escolhendoChegada = true;
+  renderEditor();
+};
+
 $('#btn-tamanho-mapa').onclick = () => {
   const l = Math.min(64, Math.max(8, Math.round(Number($('#largura-mapa').value) || editor.mapa.l)));
   const a = Math.min(64, Math.max(8, Math.round(Number($('#altura-mapa').value) || editor.mapa.a)));
