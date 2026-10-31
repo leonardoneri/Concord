@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { io } from 'socket.io-client';
+import { DatabaseSync } from 'node:sqlite';
 import { iniciarServidor } from '../server.js';
 
 process.env.CONCORD_SEM_TITULOS = '1'; // sem buscar título no YouTube durante o teste
@@ -282,6 +283,57 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('sala vazia: o vídeo para', (await emit(leo, 'assistir:estado')) === null);
   leo.emit('voz:sair');
   await espera(200);
+}
+
+// ---------- painel de admin (admin do Concord) ----------
+{
+  ok('quem não é admin do Concord não vê o painel', !!(await emit(leo, 'adm:contas')).erro);
+  const banco = new DatabaseSync(path.join(dados, 'chat.db'));
+  banco.prepare("UPDATE contas SET admin = 1 WHERE usuario = 'leo'").run();
+  banco.close();
+  const contas = await emit(leo, 'adm:contas');
+  const anaNaLista = contas.find((c) => c.usuario === 'ana');
+  ok('admin vê todas as contas, com mensagens e onde está', contas.length >= 3 && anaNaLista.mensagens > 0 && anaNaLista.online?.status === 'online');
+  const resumo = await emit(leo, 'adm:resumo');
+  ok('resumo com números e quem está online', resumo.contas === contas.length && resumo.mensagens > 0 && resumo.online.some((o) => o.nome === 'Ana'));
+  const tudo = await emit(leo, 'adm:atividade', {});
+  ok('atividade registra conta criada e call', tudo.some((a) => a.nome === 'Ana' && a.texto.startsWith('criou a conta'))
+    && tudo.some((a) => a.tipo === 'voz' && a.texto.startsWith('saiu da call')));
+  const daAna = await emit(leo, 'adm:atividade', { conta: ana.conta });
+  ok('atividade filtrada por conta', daAna.length > 0 && daAna.every((a) => a.conta === ana.conta));
+  ok('atividade pagina com "antes"', (await emit(leo, 'adm:atividade', { antes: tudo.at(-1).id })).every((a) => a.id < tudo.at(-1).id));
+
+  // senha nova: derruba a pessoa e a senha antiga para de valer
+  const encerrada = proximo(bia, 'conta:encerrada');
+  const { senha: nova } = await emit(leo, 'adm:conta:senha', bia.conta);
+  ok('trocar senha derruba a pessoa', typeof (await encerrada) === 'string');
+  const s1 = await conectar();
+  ok('senha antiga não entra mais', !!(await emit(s1, 'conta:entrar', { usuario: 'bia', senha: 'segredo123' })).erro);
+  ok('senha nova entra', !!(await emit(s1, 'conta:entrar', { usuario: 'bia', senha: nova })).token);
+  s1.disconnect();
+
+  // entrar e apagar servidor de outra pessoa
+  const zeca = await pessoa('zeca', 'Zeca', convite);
+  const { id: srvZeca } = await emit(zeca, 'servidor:criar', { nome: 'Do Zeca' });
+  ok('não apaga conta de quem é dono de servidor', !!(await emit(leo, 'adm:conta:apagar', { conta: zeca.conta })).erro);
+  await emit(leo, 'adm:servidor:entrar', srvZeca);
+  ok('admin entra em qualquer servidor sem convite', !(await emit(leo, 'servidor:abrir', srvZeca)).erro);
+  await emit(leo, 'servidor:abrir', srv1);
+  await emit(leo, 'adm:servidor:apagar', srvZeca);
+  ok('admin apaga servidor de outra pessoa', !(await emit(leo, 'adm:servidores')).some((s) => s.id === srvZeca));
+
+  // apagar conta junto com as mensagens
+  zeca.emit('mensagem', { canal: geral, texto: 'msg do zeca' });
+  await espera(200);
+  const sumiu = proximo(ana, 'msg:apagada');
+  ok('não apaga a própria conta', !!(await emit(leo, 'adm:conta:apagar', { conta: leo.conta })).erro);
+  ok('apaga conta', !(await emit(leo, 'adm:conta:apagar', { conta: zeca.conta, mensagens: true })).erro);
+  ok('as mensagens somem pra quem está no canal', !!(await sumiu));
+  ok('e do histórico', !(await emit(leo, 'historico', geral)).some((m) => m.texto === 'msg do zeca'));
+  const s2 = await conectar();
+  ok('conta apagada não entra mais', !!(await emit(s2, 'entrar', { token: zeca.token })).sessaoInvalida);
+  s2.disconnect();
+  ok('apagar fica na atividade', (await emit(leo, 'adm:atividade', { conta: leo.conta })).some((a) => a.texto.startsWith('apagou a conta de Zeca')));
 }
 
 // ---------- backup e reinício ----------

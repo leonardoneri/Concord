@@ -38,6 +38,7 @@ function montarIceServers(turn) {
 }
 
 const raiz = path.dirname(fileURLToPath(import.meta.url));
+const LIGADO_EM = Date.now();
 const VERSAO = JSON.parse(fs.readFileSync(path.join(raiz, 'package.json'), 'utf8')).version;
 
 function corDoNome(nome) {
@@ -47,12 +48,22 @@ function corDoNome(nome) {
 }
 const corDaConta = (conta) => conta.cor || corDoNome(conta.nome);
 
+function duracao(ms) {
+  const min = Math.round(ms / 60_000);
+  if (min < 1) return 'menos de 1 min';
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  return min % 60 ? `${h} h ${min % 60} min` : `${h} h`;
+}
+
 const idDeStream = (v) => (typeof v === 'string' && v.length <= 100 ? v : null);
 
 const MAX_IMAGEM = 10 * 1024 * 1024;
 const MAX_ARQUIVO = 25 * 1024 * 1024; // outros arquivos (vídeo, zip…)
 const MAX_REACOES_DIFERENTES = 20; // emojis diferentes por mensagem
 const PAGINA = 50; // mensagens por vez no histórico
+const PAGINA_ATIVIDADE = 100; // linhas por vez na atividade do painel de admin
+const DIAS_ATIVIDADE = 90; // atividade mais velha que isso some
 const BACKUPS_MANTIDOS = 7; // um por dia
 const STATUS = ['online', 'ausente', 'ocupado', 'invisivel'];
 // Um emoji (com tom de pele, variação e combinações tipo 👨‍👩‍👧)
@@ -529,12 +540,21 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       emoji TEXT NOT NULL,
       PRIMARY KEY (mensagem, conta, emoji)
     );
+    -- o que cada um fez (painel de admin); nome = como a pessoa se chamava na hora
+    CREATE TABLE IF NOT EXISTS atividades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conta INTEGER,
+      nome TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      texto TEXT NOT NULL,
+      criado_em INTEGER NOT NULL
+    );
   `);
   // Colunas que chegaram depois: bancos antigos ganham elas sem perder nada
   const colunasNovas = {
     contas: {
       nome: 'TEXT', cor: 'TEXT', avatar: 'TEXT', bio: "TEXT NOT NULL DEFAULT ''", admin: 'INTEGER NOT NULL DEFAULT 0',
-      status: "TEXT NOT NULL DEFAULT 'online'", status_texto: "TEXT NOT NULL DEFAULT ''",
+      status: "TEXT NOT NULL DEFAULT 'online'", status_texto: "TEXT NOT NULL DEFAULT ''", visto_em: 'INTEGER',
     },
     mensagens: { conta: 'INTEGER', editado_em: 'INTEGER', fixada: 'INTEGER NOT NULL DEFAULT 0', canal_id: 'INTEGER', resposta: 'INTEGER', enquete: 'TEXT' },
     canais: { servidor: 'INTEGER', privado: 'INTEGER NOT NULL DEFAULT 0', mapa: 'TEXT' },
@@ -554,6 +574,8 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     CREATE INDEX IF NOT EXISTS idx_mensagens_fixadas_id ON mensagens (canal_id, fixada);
     CREATE INDEX IF NOT EXISTS idx_membros_conta ON membros (conta);
     CREATE INDEX IF NOT EXISTS idx_canais_tipo_nome ON canais (tipo, nome);
+    CREATE INDEX IF NOT EXISTS idx_atividades_conta ON atividades (conta, id);
+    CREATE INDEX IF NOT EXISTS idx_mensagens_conta ON mensagens (conta);
   `);
   const novoConvite = () => {
     for (;;) {
@@ -690,6 +712,32 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     dmsDa: db.prepare(`SELECT c.*, (SELECT MAX(criado_em) FROM mensagens WHERE canal_id = c.id) AS ultima FROM canais c
       WHERE c.tipo = 'dm' AND (c.nome LIKE ? OR c.nome LIKE ?)`),
     compartilhamServidor: db.prepare('SELECT 1 FROM membros a JOIN membros b ON a.servidor = b.servidor WHERE a.conta = ? AND b.conta = ?'),
+
+    // painel de admin (contas.admin = admin do Concord inteiro, não de um servidor)
+    registrar: db.prepare('INSERT INTO atividades (conta, nome, tipo, texto, criado_em) VALUES (?, ?, ?, ?, ?)'),
+    atividades: db.prepare(`SELECT * FROM atividades WHERE (?1 IS NULL OR conta = ?1) AND (?2 IS NULL OR id < ?2)
+      ORDER BY id DESC LIMIT ${PAGINA_ATIVIDADE}`),
+    limparAtividades: db.prepare('DELETE FROM atividades WHERE criado_em < ?'),
+    vistoEm: db.prepare('UPDATE contas SET visto_em = ? WHERE id = ?'),
+    todasContas: db.prepare(`SELECT c.id, c.usuario, c.nome, c.cor, c.avatar, c.admin, c.criado_em, c.visto_em,
+      (SELECT COUNT(*) FROM mensagens m WHERE m.conta = c.id) AS mensagens,
+      (SELECT MAX(criado_em) FROM mensagens m WHERE m.conta = c.id) AS ultima_mensagem,
+      (SELECT group_concat(s.nome, ', ') FROM membros mb JOIN servidores s ON s.id = mb.servidor WHERE mb.conta = c.id) AS servidores
+      FROM contas c ORDER BY c.id`),
+    todosServidores: db.prepare(`SELECT s.id, s.nome, s.icone, s.dono, s.criado_em, c.nome AS dono_nome,
+      (SELECT COUNT(*) FROM membros m WHERE m.servidor = s.id) AS membros,
+      (SELECT COUNT(*) FROM canais k WHERE k.servidor = s.id) AS canais,
+      (SELECT COUNT(*) FROM mensagens m JOIN canais k ON k.id = m.canal_id WHERE k.servidor = s.id) AS mensagens
+      FROM servidores s LEFT JOIN contas c ON c.id = s.dono ORDER BY s.id`),
+    contar: db.prepare(`SELECT (SELECT COUNT(*) FROM contas) AS contas, (SELECT COUNT(*) FROM servidores) AS servidores,
+      (SELECT COUNT(*) FROM mensagens) AS mensagens, (SELECT COUNT(*) FROM mensagens WHERE criado_em > ?) AS mensagensHoje`),
+    mensagensDaConta: db.prepare('SELECT * FROM mensagens WHERE conta = ?'),
+    trocarSenha: db.prepare('UPDATE contas SET senha = ? WHERE id = ?'),
+    adminGeral: db.prepare('UPDATE contas SET admin = ? WHERE id = ?'),
+    apagarSessoesDa: db.prepare('DELETE FROM sessoes WHERE conta = ?'),
+    servidoresDoDono: db.prepare('SELECT * FROM servidores WHERE dono = ?'),
+    apagarConta: db.prepare('DELETE FROM contas WHERE id = ?'),
+    tirarRastrosDa: ['membros', 'membro_cargos', 'presencas', 'votos', 'reacoes'].map((t) => db.prepare(`DELETE FROM ${t} WHERE conta = ?`)),
   };
   const limitador = criarLimitador();
 
@@ -702,6 +750,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (!fs.existsSync(arquivo)) db.exec(`VACUUM INTO '${arquivo.replace(/'/g, "''")}'`);
       const antigos = fs.readdirSync(pastaBackups).filter((f) => /^chat-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort().slice(0, -BACKUPS_MANTIDOS);
       antigos.forEach((f) => fs.rmSync(path.join(pastaBackups, f)));
+      sql.limparAtividades.run(Date.now() - DIAS_ATIVIDADE * 86_400_000);
     } catch (err) {
       console.error('Erro no backup', err);
     }
@@ -956,6 +1005,62 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     emitirPerfis(srv);
     emitirPresenca();
   }
+  function apagarServidor(s) {
+    const contas = sql.contasMembros.all(s.id).map((m) => m.conta);
+    const canais = sql.canaisDo.all(s.id);
+    const canaisVoz = new Set(canais.filter((c) => c.tipo === 'voz').map((c) => c.id));
+    tirarDaVoz((o) => canaisVoz.has(o.voz));
+    canais.forEach((c) => {
+      sql.limparAcessoDoCanal.run(c.id);
+      sql.apagarReacoesDoCanal.run(c.id);
+      sql.apagarVotosDoCanal.run(c.id);
+      sql.apagarMensagensDoCanal.run(c.id);
+      sql.apagarCanal.run(c.id);
+    });
+    sql.apagarMembros.run(s.id);
+    sql.apagarServidor.run(s.id);
+    sql.apagarSonsDo.run(s.id);
+    sql.apagarEmojisDo.run(s.id);
+    sql.apagarCargosDo.run(s.id);
+    sql.apagarMembroCargosDo.run(s.id);
+    sql.apagarEventosDo.run(s.id);
+    io.to(sala(s.id)).emit('servidor:removido', { id: s.id, nome: s.nome });
+    io.in(sala(s.id)).socketsLeave(sala(s.id));
+    for (const o of usuarios.values()) if (o.servidor === s.id) o.servidor = null;
+    contas.forEach(emitirServidores);
+    emitirPresenca();
+  }
+
+  // ---------- atividade (painel de admin) ----------
+  function registrar(conta, tipo, texto) {
+    sql.registrar.run(conta, sql.contaPorId.get(conta)?.nome ?? '?', tipo, texto, Date.now());
+  }
+  const nomeServidor = (srv) => sql.servidor.get(srv)?.nome ?? '?';
+  const ondeCanal = (c) => (c.servidor ? `${c.nome} (${nomeServidor(c.servidor)})` : c.nome);
+  // quem está em call: conta -> { canal, desde }. Fica fora do usuário pra reconexão não virar "saiu e entrou"
+  const emCall = new Map();
+  function entrouNaCall(conta, canal) {
+    if (emCall.get(conta)?.canal === canal) return;
+    saiuDaCall(conta);
+    emCall.set(conta, { canal, desde: Date.now() });
+    const c = sql.canal.get(canal);
+    if (c) registrar(conta, 'voz', `entrou na call ${ondeCanal(c)}`);
+  }
+  function saiuDaCall(conta, motivo = '') {
+    const n = emCall.get(conta);
+    if (!n) return;
+    emCall.delete(conta);
+    const c = sql.canal.get(n.canal);
+    registrar(conta, 'voz', `saiu da call ${c ? ondeCanal(c) : '(apagada)'} depois de ${duracao(Date.now() - n.desde)}${motivo}`);
+  }
+  // Derruba todas as janelas da conta (sessão apagada, senha trocada, conta apagada)
+  function encerrarConta(conta, motivo) {
+    socketsDaConta(conta).forEach((so) => {
+      so.emit('conta:encerrada', motivo);
+      so.disconnect(true);
+    });
+  }
+
   // Manda um evento pra quem vê o canal (servidor inteiro, ou as duas pessoas da DM)
   function emitirNoCanal(c, evento, dados, semSocket = null) {
     if (ehDm(c)) {
@@ -1042,6 +1147,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   function tirarDaVoz(filtro) {
     for (const o of usuarios.values()) {
       if (o.voz != null && filtro(o)) {
+        saiuDaCall(o.conta, ' (tirado da call)');
         Object.assign(o, { voz: null, mic: null, camera: null, tela: null, pos: null });
         previas.delete(o.id);
         io.to(o.socket).emit('voz:expulso');
@@ -1069,6 +1175,12 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       quando(evento, (u, dados, ack) => {
         if (!u.servidor || !ehAdminDe(u.servidor, u.conta)) return ack({ erro: 'Só admin pode fazer isso' });
         return fn(u, dados, ack, u.servidor);
+      });
+    // Painel de admin: só quem é admin do Concord inteiro (contas.admin), não de um servidor
+    const quandoAdminGeral = (evento, fn) =>
+      quando(evento, (u, dados, ack) => {
+        if (!sql.contaPorId.get(u.conta)?.admin) return ack({ erro: 'Só o admin do Concord pode fazer isso' });
+        return fn(u, dados, ack);
       });
 
     const ip = String(socket.handshake.headers['x-forwarded-for'] ?? socket.handshake.address).split(',')[0].trim();
@@ -1102,6 +1214,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         sql.entrarServidor.run(servidorConvite.id, conta, 0, Date.now());
         emitirPerfis(servidorConvite.id);
       }
+      registrar(conta, 'conta', servidorConvite ? `criou a conta com o convite de ${servidorConvite.nome}` : 'criou a conta');
       ack({ token: novaSessao(conta) });
     });
 
@@ -1111,8 +1224,10 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const conta = sql.contaPorUsuario.get(String(usuario ?? '').trim());
       if (!conta || !(await conferirSenha(String(senhaConta ?? ''), conta.senha))) {
         limitador.errou(ip);
+        if (conta) registrar(conta.id, 'login', `errou a senha (IP ${ip})`);
         return ack({ erro: 'Usuário ou senha errados' });
       }
+      registrar(conta.id, 'login', `entrou com usuário e senha (IP ${ip})`);
       ack({ token: novaSessao(conta.id) });
     });
 
@@ -1128,6 +1243,12 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       // id escolhido pela aba; se for inválido ou de outra conta, usa o do socket
       let id = typeof sessao === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(sessao) ? sessao : socket.id;
       if ([...usuarios.values()].some((o) => o.id === id && o.conta !== conta.id)) id = socket.id;
+      // abriu o app agora (não é só a conexão voltando nem outra janela)
+      const app = String(socket.handshake.headers['user-agent'] ?? '').match(/concord\/(\d+\.\d+\.\d+)/i)?.[1];
+      if (!socketsDaConta(conta.id).length && Date.now() - (conta.visto_em ?? 0) > 10 * 60_000) {
+        registrar(conta.id, 'online', `abriu o Concord (${app ? `app ${app}` : 'navegador'})`);
+      }
+      sql.vistoEm.run(Date.now(), conta.id);
 
       // A mesma conta aberta em outro lugar (ou reconectando antes do servidor perceber a queda): derruba a velha
       for (const o of [...usuarios.values()]) {
@@ -1145,6 +1266,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         nome: conta.nome,
         cor: corDaConta(conta),
         servidor: null, // servidor aberto na tela ('dm' = conversas diretas)
+        app: app ?? null, // versão do app desktop (null = navegador)
         status: STATUS.includes(conta.status) ? conta.status : 'online',
         statusTexto: conta.status_texto ?? '',
         jogo: null,
@@ -1169,6 +1291,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
             mic: idDeStream(voltar.mic), camera: idDeStream(voltar.camera), tela: idDeStream(voltar.tela),
           });
           voz = { outros: [...usuarios.values()].filter((o) => o.voz === c.id && o.id !== id).map((o) => o.id) };
+          entrouNaCall(conta.id, c.id);
         }
       }
       ack({
@@ -1182,6 +1305,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         servidores: servidores.map(resumoServidor),
         iceServers: ICE_SERVERS,
         versao: VERSAO,
+        admin: !!conta.admin, // admin do Concord: vê o painel de admin
         // eventos que eu confirmei (de todos os servidores), pros lembretes
         eventos: sql.meusEventos.all(conta.id, Date.now() - DURA_EVENTO).map(eventoPublico),
         voz,
@@ -1205,6 +1329,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         return ack({ erro: `Dá pra ser dono de no máximo ${MAX_SERVIDORES_POR_CONTA} servidores` });
       }
       const id = criarServidor(limpo.nome, u.conta);
+      registrar(u.conta, 'servidor', `criou o servidor ${limpo.nome}`);
       socketsDaConta(u.conta).forEach((s) => s.join(sala(id)));
       emitirServidores(u.conta);
       ack({ id });
@@ -1219,6 +1344,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       }
       if (!ehMembro(s.id, u.conta)) {
         sql.entrarServidor.run(s.id, u.conta, 0, Date.now());
+        registrar(u.conta, 'servidor', `entrou no servidor ${s.nome} pelo convite`);
         socketsDaConta(u.conta).forEach((so) => so.join(sala(s.id)));
         emitirServidores(u.conta);
         emitirPerfis(s.id);
@@ -1232,35 +1358,15 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (!s || !ehMembro(s.id, u.conta)) return ack({ erro: 'Você não está nesse servidor' });
       if (s.dono === u.conta) return ack({ erro: 'Você é o dono: pra sair, apague o servidor' });
       removerMembro(s.id, u.conta);
+      registrar(u.conta, 'servidor', `saiu do servidor ${s.nome}`);
       ack({});
     });
 
     quando('servidor:apagar', (u, id, ack) => {
       const s = sql.servidor.get(Number(id));
       if (!s || s.dono !== u.conta) return ack({ erro: 'Só o dono pode apagar o servidor' });
-      const contas = sql.contasMembros.all(s.id).map((m) => m.conta);
-      const canais = sql.canaisDo.all(s.id);
-      const canaisVoz = new Set(canais.filter((c) => c.tipo === 'voz').map((c) => c.id));
-      tirarDaVoz((o) => canaisVoz.has(o.voz));
-      canais.forEach((c) => {
-        sql.limparAcessoDoCanal.run(c.id);
-        sql.apagarReacoesDoCanal.run(c.id);
-        sql.apagarVotosDoCanal.run(c.id);
-        sql.apagarMensagensDoCanal.run(c.id);
-        sql.apagarCanal.run(c.id);
-      });
-      sql.apagarMembros.run(s.id);
-      sql.apagarServidor.run(s.id);
-      sql.apagarSonsDo.run(s.id);
-      sql.apagarEmojisDo.run(s.id);
-      sql.apagarCargosDo.run(s.id);
-      sql.apagarMembroCargosDo.run(s.id);
-      sql.apagarEventosDo.run(s.id);
-      io.to(sala(s.id)).emit('servidor:removido', { id: s.id, nome: s.nome });
-      io.in(sala(s.id)).socketsLeave(sala(s.id));
-      for (const o of usuarios.values()) if (o.servidor === s.id) o.servidor = null;
-      contas.forEach(emitirServidores);
-      emitirPresenca();
+      apagarServidor(s);
+      registrar(u.conta, 'servidor', `apagou o servidor ${s.nome}`);
       ack({});
     });
 
@@ -1310,6 +1416,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (alvo.admin && u.conta !== s.dono) return ack({ erro: 'Só o dono pode expulsar um admin' });
       socketsDaConta(conta).forEach((so) => so.emit('servidor:expulso', { id: srv, nome: s.nome }));
       removerMembro(srv, conta);
+      registrar(u.conta, 'servidor', `expulsou ${sql.contaPorId.get(conta)?.nome ?? '?'} de ${s.nome}`);
       ack({});
     });
 
@@ -1318,6 +1425,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (!ehMembro(srv, conta)) return ack({ erro: 'Essa pessoa não está no servidor' });
       if (sql.servidor.get(srv).dono === conta) return ack({ erro: 'O dono é sempre admin' });
       sql.definirAdmin.run(admin ? 1 : 0, srv, conta);
+      registrar(u.conta, 'servidor', `${admin ? 'deu' : 'tirou'} admin ${admin ? 'para' : 'de'} ${sql.contaPorId.get(conta)?.nome ?? '?'} em ${nomeServidor(srv)}`);
       emitirPerfis(srv);
       acessoMudou(srv);
       ack({});
@@ -1380,6 +1488,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       if (dono && dono.id !== u.conta) return ack({ erro: `Já tem alguém chamado "${limpo.nome}"` });
       const antigo = u.nome;
       sql.trocarNome.run(limpo.nome, u.conta);
+      if (antigo !== limpo.nome) registrar(u.conta, 'conta', `trocou o nome de ${antigo} para ${limpo.nome}`);
       const cor = corDaConta(sql.contaPorId.get(u.conta));
       sql.renomearMensagens.run(limpo.nome, cor, antigo);
       Object.assign(u, { nome: limpo.nome, cor });
@@ -1431,6 +1540,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const mapaLimpo = tipo === 'voz' && mapa != null ? limparMapa(mapa) : null;
       if (tipo === 'voz' && mapa != null && !mapaLimpo) return ack({ erro: 'Mapa inválido' });
       const { lastInsertRowid } = sql.criarCanal.run(srv, tipo, limpo.nome, '', srv);
+      registrar(u.conta, 'servidor', `criou o canal ${tipo === 'texto' ? '#' : ''}${limpo.nome} em ${nomeServidor(srv)}`);
       if (mapaLimpo) sql.mapaCanal.run(JSON.stringify(mapaLimpo), Number(lastInsertRowid));
       emitirServidor(srv);
       ack({ id: Number(lastInsertRowid), nome: limpo.nome });
@@ -1554,6 +1664,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const canal = canalDoAdmin(u, id);
       if (!canal) return ack({ erro: 'Só admin pode fazer isso' });
       if (canaisDe(canal.servidor, canal.tipo).length <= 1) return ack({ erro: 'Precisa sobrar pelo menos um canal desse tipo' });
+      registrar(u.conta, 'servidor', `apagou o canal ${canal.tipo === 'texto' ? '#' : ''}${ondeCanal(canal)}`);
       sql.apagarCanal.run(canal.id);
       sql.limparAcessoDoCanal.run(canal.id);
       if (canal.tipo === 'texto') {
@@ -1650,6 +1761,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const { m, c } = mensagemDoMembro(id, u.conta);
       if (!m) return ack({ erro: 'Mensagem não encontrada' });
       if (m.conta !== u.conta && !ehAdminDe(c.servidor, u.conta)) return ack({ erro: 'Só dá pra apagar as suas mensagens' });
+      if (m.conta !== u.conta) registrar(u.conta, 'mensagem', `apagou uma mensagem de ${m.autor} em #${ondeCanal(c)}: "${m.texto.slice(0, 80)}"`);
       sql.apagarMensagem.run(m.id);
       sql.apagarReacoes.run(m.id);
       sql.apagarVotos.run(m.id);
@@ -1837,6 +1949,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const c = canalDoMembro(canal, u.conta, 'voz');
       if (!c) return ack(null);
       u.voz = c.id;
+      entrouNaCall(u.conta, c.id);
       u.camera = null;
       u.tela = null;
       u.pos = null;
@@ -1904,6 +2017,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     });
 
     quando('voz:sair', (u) => {
+      saiuDaCall(u.conta);
       Object.assign(u, { voz: null, mic: null, camera: null, tela: null, rede: null, pos: null });
       previas.delete(u.id);
       emitirPresenca();
@@ -2082,11 +2196,151 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     });
     quando('tela:ver-previa', (u, id, ack) => ack({ img: previas.get(id) ?? null }));
 
+    // ---------- painel de admin ----------
+    // onde a pessoa está agora (null = offline)
+    function ondeEsta(conta) {
+      const u = [...usuarios.values()].find((o) => o.conta === conta);
+      if (!u) return null;
+      const voz = u.voz != null && sql.canal.get(u.voz);
+      return {
+        status: u.status, jogo: u.jogo?.nome ?? null, app: u.app,
+        servidor: u.servidor === 'dm' ? 'Mensagens diretas' : u.servidor ? nomeServidor(u.servidor) : null,
+        voz: voz ? ondeCanal(voz) : null,
+      };
+    }
+    const contaOuErro = (conta, ack) => {
+      const alvo = sql.contaPorId.get(Number(conta));
+      if (!alvo) ack({ erro: 'Conta não encontrada' });
+      return alvo;
+    };
+
+    quandoAdminGeral('adm:resumo', (u, _, ack) => {
+      const online = [...new Set([...usuarios.values()].map((o) => o.conta))]
+        .map((conta) => ({ conta, nome: sql.contaPorId.get(conta)?.nome ?? '?', ...ondeEsta(conta) }));
+      let backups = [];
+      try {
+        backups = fs.readdirSync(pastaBackups).filter((f) => f.endsWith('.db')).sort().reverse()
+          .map((f) => ({ nome: f, tamanho: fs.statSync(path.join(pastaBackups, f)).size }));
+      } catch {}
+      let banco = 0;
+      try {
+        banco = fs.statSync(path.join(pastaDados, 'chat.db')).size;
+      } catch {}
+      ack({ ...sql.contar.get(Date.now() - 86_400_000), online, backups, banco, versao: VERSAO, ligadoDesde: LIGADO_EM });
+    });
+
+    quandoAdminGeral('adm:contas', (u, _, ack) => {
+      ack(sql.todasContas.all().map((c) => ({ ...c, cor: corDaConta(c), admin: !!c.admin, online: ondeEsta(c.id) })));
+    });
+
+    quandoAdminGeral('adm:servidores', (u, _, ack) => {
+      ack(sql.todosServidores.all().map((s) => ({ ...s, souMembro: ehMembro(s.id, u.conta) })));
+    });
+
+    // { conta (opcional), antes (id da última linha que já tenho) }
+    quandoAdminGeral('adm:atividade', (u, { conta, antes } = {}, ack) => {
+      ack(sql.atividades.all(conta == null ? null : Number(conta), antes == null ? null : Number(antes)));
+    });
+
+    quandoAdminGeral('adm:conta:deslogar', (u, conta, ack) => {
+      const alvo = contaOuErro(conta, ack);
+      if (!alvo) return;
+      sql.apagarSessoesDa.run(alvo.id);
+      encerrarConta(alvo.id, 'Um admin encerrou sua sessão. Entre de novo.');
+      registrar(u.conta, 'admin', `deslogou ${alvo.nome} de todos os lugares`);
+      ack({});
+    });
+
+    // gera uma senha nova pra quem esqueceu (o admin passa pra pessoa)
+    quandoAdminGeral('adm:conta:senha', async (u, conta, ack) => {
+      const alvo = contaOuErro(conta, ack);
+      if (!alvo) return;
+      const senhaNova = [...randomBytes(10)].map((b) => LETRAS_CONVITE[b % LETRAS_CONVITE.length]).join('');
+      sql.trocarSenha.run(await hashSenha(senhaNova), alvo.id);
+      sql.apagarSessoesDa.run(alvo.id);
+      if (alvo.id !== u.conta) encerrarConta(alvo.id, 'Sua senha foi trocada por um admin. Peça a senha nova pra ele.');
+      registrar(u.conta, 'admin', `trocou a senha de ${alvo.nome}`);
+      ack({ senha: senhaNova });
+    });
+
+    quandoAdminGeral('adm:conta:admin', (u, { conta, admin } = {}, ack) => {
+      const alvo = contaOuErro(conta, ack);
+      if (!alvo) return;
+      if (alvo.id === u.conta) return ack({ erro: 'Você não pode tirar o seu próprio admin' });
+      sql.adminGeral.run(admin ? 1 : 0, alvo.id);
+      socketsDaConta(alvo.id).forEach((so) => so.emit('admin:geral', !!admin));
+      registrar(u.conta, 'admin', `${admin ? 'deu' : 'tirou'} admin do Concord ${admin ? 'para' : 'de'} ${alvo.nome}`);
+      ack({});
+    });
+
+    // mensagens = true apaga também tudo o que a pessoa escreveu (e as conversas diretas dela)
+    quandoAdminGeral('adm:conta:apagar', (u, { conta, mensagens } = {}, ack) => {
+      const alvo = contaOuErro(conta, ack);
+      if (!alvo) return;
+      if (alvo.id === u.conta) return ack({ erro: 'Não dá pra apagar a sua própria conta' });
+      const donoDe = sql.servidoresDoDono.all(alvo.id);
+      if (donoDe.length) return ack({ erro: `${alvo.nome} é dono de ${donoDe.map((s) => s.nome).join(', ')}. Apague esses servidores antes.` });
+      sql.servidoresDa.all(alvo.id).forEach((s) => removerMembro(s.id, alvo.id));
+      saiuDaCall(alvo.id);
+      encerrarConta(alvo.id, 'Sua conta foi apagada por um admin.');
+      if (mensagens) {
+        for (const m of sql.mensagensDaConta.all(alvo.id)) {
+          sql.apagarReacoes.run(m.id);
+          sql.apagarVotos.run(m.id);
+          sql.apagarMensagem.run(m.id);
+          const c = sql.canal.get(m.canal_id);
+          if (c) emitirNoCanal(c, 'msg:apagada', { id: m.id, canal: c.id, servidor: c.servidor });
+        }
+        for (const c of dmsDa(alvo.id)) {
+          sql.apagarReacoesDoCanal.run(c.id);
+          sql.apagarVotosDoCanal.run(c.id);
+          sql.apagarMensagensDoCanal.run(c.id);
+          sql.apagarCanal.run(c.id);
+        }
+      }
+      sql.tirarRastrosDa.forEach((st) => st.run(alvo.id));
+      sql.apagarSessoesDa.run(alvo.id);
+      sql.apagarConta.run(alvo.id);
+      registrar(u.conta, 'admin', `apagou a conta de ${alvo.nome} (@${alvo.usuario})${mensagens ? ' e as mensagens' : ''}`);
+      ack({});
+    });
+
+    quandoAdminGeral('adm:servidor:apagar', (u, id, ack) => {
+      const s = sql.servidor.get(Number(id));
+      if (!s) return ack({ erro: 'Servidor não encontrado' });
+      apagarServidor(s);
+      registrar(u.conta, 'admin', `apagou o servidor ${s.nome}`);
+      ack({});
+    });
+
+    // entra (como admin) em qualquer servidor, sem convite
+    quandoAdminGeral('adm:servidor:entrar', (u, id, ack) => {
+      const s = sql.servidor.get(Number(id));
+      if (!s) return ack({ erro: 'Servidor não encontrado' });
+      if (!ehMembro(s.id, u.conta)) {
+        sql.entrarServidor.run(s.id, u.conta, 1, Date.now());
+        socketsDaConta(u.conta).forEach((so) => so.join(sala(s.id)));
+        emitirServidores(u.conta);
+        emitirPerfis(s.id);
+        registrar(u.conta, 'admin', `entrou no servidor ${s.nome} pelo painel`);
+      }
+      ack({ id: s.id });
+    });
+
     socket.on('disconnect', () => {
       const u = eu();
       if (!u) return;
       usuarios.delete(socket.id);
       previas.delete(u.id);
+      sql.vistoEm.run(Date.now(), u.conta);
+      // caiu no meio da call: só conta como saída se não voltar pra mesma sala logo
+      if (u.voz != null) {
+        const canal = u.voz;
+        setTimeout(() => {
+          const voltou = [...usuarios.values()].some((o) => o.conta === u.conta && o.voz === canal);
+          if (!voltou && emCall.get(u.conta)?.canal === canal) saiuDaCall(u.conta, ' (desconectou)');
+        }, 60_000).unref?.();
+      }
       emitirPresenca();
       // dá um tempo: pode ser só o servidor/conexão voltando (o vídeo continua pra quem reconectar)
       setTimeout(limparAssistir, 90_000);

@@ -65,6 +65,7 @@ ICONES.arquivo = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2
 ICONES.arroba = '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>';
 ICONES.chat = '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>';
 ICONES.mapa = '<path d="M14.1 6.4 9.9 4.2a2 2 0 0 0-1.8 0L3.6 6.4A1 1 0 0 0 3 7.3v12.1a1 1 0 0 0 1.4.9l3.7-1.9a2 2 0 0 1 1.8 0l4.2 2.2a2 2 0 0 0 1.8 0l4.5-2.2a1 1 0 0 0 .6-.9V4.6a1 1 0 0 0-1.4-.9l-3.7 1.9a2 2 0 0 1-1.8 0z"/><path d="M15 5.8v15M9 3.2v15"/>';
+ICONES.escudo = '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>';
 ICONES.micOff = ICONES.mic + CORTE;
 ICONES.foneOff = ICONES.fone + CORTE;
 
@@ -475,7 +476,13 @@ if (token) {
     modoLogin = 'criar';
     $('#convite').value = conviteDaUrl();
   }
-  mostrarLogin();
+  // um admin encerrou a sessão (ver 'conta:encerrada'): mostra o porquê
+  let aviso = '';
+  try {
+    aviso = sessionStorage.getItem('avisoLogin') ?? '';
+    sessionStorage.removeItem('avisoLogin');
+  } catch {}
+  mostrarLogin(aviso);
 }
 
 $('#form-login').addEventListener('submit', (e) => {
@@ -524,7 +531,11 @@ function entrar() {
       return;
     }
     const primeiraVez = !estado.eu;
-    estado.eu = { id: res.id, conta: res.conta, nome: res.nome, usuario: res.usuario, status: res.status ?? 'online', statusTexto: res.statusTexto ?? '' };
+    estado.eu = {
+      id: res.id, conta: res.conta, nome: res.nome, usuario: res.usuario, status: res.status ?? 'online', statusTexto: res.statusTexto ?? '',
+      admin: !!res.admin,
+    };
+    $('#btn-admin').hidden = !res.admin;
     estado.servidores = res.servidores;
     estado.iceServers = res.iceServers;
     estado.versao ??= res.versao ?? null; // versão desta página (a das novidades)
@@ -4951,6 +4962,284 @@ $('#modal-config').onclick = (e) => {
   pararTesteMic();
   e.target.hidden = true;
 };
+// ---------- painel de admin (só pra quem é admin do Concord) ----------
+const TITULOS_ADM = { resumo: 'Visão geral', contas: 'Contas', servidores: 'Servidores', atividade: 'Atividade' };
+const adm = { aba: 'resumo', contas: [], filtro: null, atividade: [] };
+
+function fmtQuando(ms) {
+  if (!ms) return 'nunca';
+  const min = Math.round((Date.now() - ms) / 60_000);
+  if (min < 1) return 'agora';
+  if (min < 60) return `há ${min} min`;
+  if (min < 24 * 60) return `há ${Math.round(min / 60)} h`;
+  if (min < 30 * 24 * 60) return `há ${Math.round(min / 1440)} dias`;
+  return `em ${new Date(ms).toLocaleDateString('pt-BR')}`;
+}
+const fmtTamanho = (b) => (b > 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(b / 1024)} KB`);
+const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+
+// "agora: na sala X · em Servidor · app 1.0.18"
+function fmtOnde(o) {
+  if (!o) return '';
+  const partes = [];
+  if (o.voz) partes.push(`na call ${o.voz}`);
+  else if (o.servidor) partes.push(`em ${o.servidor}`);
+  if (o.jogo) partes.push(`jogando ${o.jogo}`);
+  partes.push(o.app ? `app ${o.app}` : 'navegador');
+  if (o.status && o.status !== 'online') partes.push(STATUS_NOME[o.status]);
+  return partes.join(' · ');
+}
+
+function avatarAdm(c) {
+  const a = el('span', 'avatar', c.avatar ? '' : [...c.nome][0]?.toUpperCase() ?? '?');
+  a.style.background = c.cor;
+  if (c.avatar) {
+    a.style.backgroundImage = `url("${c.avatar}")`;
+    a.classList.add('com-foto');
+  }
+  return a;
+}
+
+function botaoAdm(texto, acao, perigo = false) {
+  const b = el('button', `btn-secundario${perigo ? ' perigo' : ''}`, texto);
+  b.type = 'button';
+  b.onclick = acao;
+  return b;
+}
+
+// manda e, se der certo, recarrega a aba aberta
+function acaoAdm(evento, dados, depois) {
+  socket.emit(evento, dados, (res) => {
+    if (res?.erro) return avisar(res.erro);
+    depois?.(res);
+    if (!depois) abrirAbaAdm(adm.aba);
+  });
+}
+
+function abrirAbaAdm(aba) {
+  adm.aba = aba;
+  $$('#modal-admin .cfg-abas [data-adm]').forEach((b) => b.classList.toggle('ativa', b.dataset.adm === aba));
+  $$('#modal-admin section[data-adm]').forEach((s) => (s.hidden = s.dataset.adm !== aba));
+  $('#adm-titulo').textContent = TITULOS_ADM[aba];
+  if (aba === 'resumo') carregarResumo();
+  if (aba === 'contas') carregarContas();
+  if (aba === 'servidores') carregarServidores();
+  if (aba === 'atividade') carregarAtividade();
+}
+$$('#modal-admin .cfg-abas [data-adm]').forEach((b) => (b.onclick = () => abrirAbaAdm(b.dataset.adm)));
+
+function abrirAdmin(aba = 'resumo') {
+  fecharPopovers();
+  $('#modal-admin').hidden = false;
+  abrirAbaAdm(aba);
+}
+$('#btn-admin').onclick = () => abrirAdmin();
+$('#btn-fechar-admin').onclick = () => ($('#modal-admin').hidden = true);
+$('#modal-admin').onclick = (e) => { if (e.target.id === 'modal-admin') e.target.hidden = true; };
+
+function carregarResumo() {
+  socket.emit('adm:resumo', null, (r) => {
+    if (r?.erro) return avisar(r.erro);
+    const numero = (n, rotulo) => {
+      const d = el('div');
+      d.append(el('b', null, n.toLocaleString('pt-BR')), el('span', null, rotulo));
+      return d;
+    };
+    $('#adm-numeros').replaceChildren(
+      numero(r.online.length, 'online agora'), numero(r.contas, 'contas'), numero(r.servidores, 'servidores'),
+      numero(r.mensagens, 'mensagens'), numero(r.mensagensHoje, 'mensagens em 24 h'),
+    );
+    $('#adm-online').replaceChildren(...(r.online.length ? r.online.map((o) => {
+      const li = el('li');
+      const info = el('div', 'adm-info');
+      info.append(el('b', null, o.nome), el('small', 'adm-agora', fmtOnde(o)));
+      li.append(info, botaoAdm('Atividade', () => verAtividadeDe(o.conta)));
+      return li;
+    }) : [el('li', null, 'Ninguém online.')]));
+    const linha = (rotulo, valor) => {
+      const d = el('div');
+      d.append(el('span', null, rotulo), el('b', null, valor));
+      return d;
+    };
+    const ultimo = r.backups[0];
+    $('#adm-sistema').replaceChildren(
+      linha('Versão', r.versao),
+      linha('Ligado', fmtQuando(r.ligadoDesde)),
+      linha('Tamanho do banco', fmtTamanho(r.banco)),
+      linha('Backups (um por dia)', ultimo ? `${r.backups.length}, o último ${ultimo.nome.slice(5, 15).split('-').reverse().join('/')}` : 'nenhum'),
+    );
+  });
+}
+
+function carregarContas() {
+  socket.emit('adm:contas', null, (lista) => {
+    if (lista?.erro) return avisar(lista.erro);
+    adm.contas = lista;
+    renderContasAdm();
+  });
+}
+
+function renderContasAdm() {
+  const busca = $('#adm-busca').value.trim().toLowerCase();
+  const lista = adm.contas
+    .filter((c) => !busca || c.nome.toLowerCase().includes(busca) || c.usuario.toLowerCase().includes(busca))
+    // online primeiro, depois quem apareceu por último
+    .sort((a, b) => !!b.online - !!a.online || (b.visto_em ?? 0) - (a.visto_em ?? 0));
+  $('#adm-contas').replaceChildren(...lista.map((c) => {
+    const li = el('li');
+    const info = el('div', 'adm-info');
+    const nome = el('b', null, c.nome);
+    if (c.admin) nome.append(el('span', 'adm-tag', 'ADMIN'));
+    if (c.online) nome.append(el('span', 'adm-tag online', 'ONLINE'));
+    const eu = c.id === estado.eu.conta;
+    info.append(
+      nome,
+      el('small', null, `@${c.usuario} · conta criada ${fmtQuando(c.criado_em)} · ${c.online ? 'online agora' : `visto ${fmtQuando(c.visto_em)}`}`),
+      el('small', null, `${plural(c.mensagens, 'mensagem', 'mensagens')}${c.ultima_mensagem ? ` (última ${fmtQuando(c.ultima_mensagem)})` : ''} · ${c.servidores ? `Servidores: ${c.servidores}` : 'Sem servidor'}`),
+    );
+    if (c.online) info.append(el('small', 'adm-agora', `Agora: ${fmtOnde(c.online)}`));
+    const acoes = el('div', 'adm-acoes');
+    acoes.append(botaoAdm('Atividade', () => verAtividadeDe(c.id)));
+    acoes.append(botaoAdm('Nova senha', () => {
+      if (!confirm(`Gerar uma senha nova pra ${c.nome}? A senha antiga para de funcionar${eu ? '' : ' e a pessoa sai de todos os lugares'}.`)) return;
+      acaoAdm('adm:conta:senha', c.id, ({ senha }) => mostrarSenhaNova(li, c, senha));
+    }));
+    if (!eu) {
+      acoes.append(botaoAdm('Deslogar', () => {
+        if (confirm(`Deslogar ${c.nome} de todos os lugares? A pessoa precisa entrar de novo com a senha.`)) acaoAdm('adm:conta:deslogar', c.id);
+      }));
+      acoes.append(botaoAdm(c.admin ? 'Tirar admin' : 'Tornar admin', () => {
+        const pergunta = c.admin ? `Tirar o admin do Concord de ${c.nome}?` : `Tornar ${c.nome} admin do Concord? A pessoa vai ver este painel e poder apagar contas e servidores.`;
+        if (confirm(pergunta)) acaoAdm('adm:conta:admin', { conta: c.id, admin: !c.admin });
+      }));
+      acoes.append(botaoAdm('Apagar', () => {
+        if (!confirm(`Apagar a conta de ${c.nome} (@${c.usuario})? Não dá pra desfazer.`)) return;
+        const mensagens = c.mensagens > 0
+          && confirm(`Apagar também as ${plural(c.mensagens, 'mensagem', 'mensagens')} e as conversas diretas de ${c.nome}?\n\nOK = apagar tudo\nCancelar = manter as mensagens com o nome antigo`);
+        acaoAdm('adm:conta:apagar', { conta: c.id, mensagens });
+      }, true));
+    }
+    li.append(avatarAdm(c), info, acoes);
+    return li;
+  }));
+}
+$('#adm-busca').oninput = renderContasAdm;
+
+function mostrarSenhaNova(li, c, senha) {
+  li.querySelector('.adm-senha')?.remove();
+  const caixa = el('div', 'linha-copiar adm-senha');
+  const input = el('input');
+  input.readOnly = true;
+  input.value = senha;
+  const copiar = el('button', 'btn-primario', 'Copiar');
+  copiar.type = 'button';
+  copiar.onclick = () => {
+    navigator.clipboard?.writeText(senha);
+    copiar.textContent = 'Copiado';
+    copiar.classList.add('copiado');
+  };
+  caixa.append(input, copiar);
+  li.append(caixa);
+  avisar(`Senha nova de ${c.nome} criada. Copie e mande pra pessoa: ela não aparece de novo.`, 8000);
+}
+
+function carregarServidores() {
+  socket.emit('adm:servidores', null, (lista) => {
+    if (lista?.erro) return avisar(lista.erro);
+    $('#adm-servidores').replaceChildren(...lista.map((s) => {
+      const li = el('li');
+      const ic = el('div', 'icone-servidor');
+      pintarIconeServidor(ic, s);
+      const info = el('div', 'adm-info');
+      info.append(
+        el('b', null, s.nome),
+        el('small', null, `Dono: ${s.dono_nome ?? '(conta apagada)'} · criado ${fmtQuando(s.criado_em)}`),
+        el('small', null, `${plural(s.membros, 'membro', 'membros')} · ${plural(s.canais, 'canal', 'canais')} · ${plural(s.mensagens, 'mensagem', 'mensagens')}`),
+      );
+      const acoes = el('div', 'adm-acoes');
+      acoes.append(botaoAdm(s.souMembro ? 'Abrir' : 'Entrar', () => {
+        const abrir = () => {
+          $('#modal-admin').hidden = true;
+          abrirServidor(s.id);
+        };
+        if (s.souMembro) return abrir();
+        // a lista nova ('servidores') chega antes do ack
+        acaoAdm('adm:servidor:entrar', s.id, abrir);
+      }));
+      acoes.append(botaoAdm('Apagar', () => {
+        if (!confirm(`Apagar o servidor ${s.nome}, com todos os canais e ${plural(s.mensagens, 'mensagem', 'mensagens')}? Não dá pra desfazer.`)) return;
+        if (confirm(`Certeza mesmo? Os ${plural(s.membros, 'membro', 'membros')} perdem o servidor.`)) acaoAdm('adm:servidor:apagar', s.id);
+      }, true));
+      li.append(ic, info, acoes);
+      return li;
+    }));
+  });
+}
+
+function verAtividadeDe(conta) {
+  adm.filtro = conta;
+  abrirAbaAdm('atividade');
+}
+
+function carregarAtividade(mais = false) {
+  const filtro = $('#adm-filtro');
+  // o filtro lista as contas que existem agora (quem foi apagado continua na atividade com o nome antigo)
+  const preencherFiltro = () => {
+    filtro.replaceChildren(new Option('Todo mundo', ''), ...adm.contas
+      .slice().sort((a, b) => a.nome.localeCompare(b.nome))
+      .map((c) => new Option(`${c.nome} (@${c.usuario})`, c.id)));
+    filtro.value = adm.filtro ?? '';
+  };
+  if (!mais) {
+    if (adm.contas.length) preencherFiltro();
+    socket.emit('adm:contas', null, (lista) => {
+      if (Array.isArray(lista)) adm.contas = lista;
+      preencherFiltro();
+    });
+  }
+  const antes = mais ? adm.atividade.at(-1)?.id : undefined;
+  socket.emit('adm:atividade', { conta: adm.filtro, antes }, (linhas) => {
+    if (linhas?.erro) return avisar(linhas.erro);
+    adm.atividade = mais ? adm.atividade.concat(linhas) : linhas;
+    $('#adm-mais').hidden = linhas.length < 100;
+    const itens = linhas.map((a) => {
+      const li = el('li');
+      li.dataset.tipo = a.tipo;
+      const d = new Date(a.criado_em);
+      const quando = el('time', null, `${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${fmtHora(d)}`);
+      quando.title = d.toLocaleString('pt-BR');
+      const texto = el('span');
+      const quem = el('b', null, a.nome);
+      quem.title = 'Ver só a atividade dessa pessoa';
+      quem.onclick = () => verAtividadeDe(a.conta);
+      texto.append(quem, ` ${a.texto}`);
+      li.append(quando, texto);
+      return li;
+    });
+    if (mais) $('#adm-atividade').append(...itens);
+    else $('#adm-atividade').replaceChildren(...(itens.length ? itens : [el('li', null, 'Nada registrado ainda.')]));
+  });
+}
+$('#adm-filtro').onchange = (e) => {
+  adm.filtro = e.target.value ? Number(e.target.value) : null;
+  carregarAtividade();
+};
+$('#adm-mais').onclick = () => carregarAtividade(true);
+
+// um admin mexeu na minha conta
+socket.on('conta:encerrada', (motivo) => {
+  token = null;
+  salvarStorage('token', null);
+  try { sessionStorage.setItem('avisoLogin', motivo); } catch {}
+  setTimeout(() => location.reload(), 200);
+});
+socket.on('admin:geral', (admin) => {
+  if (!estado.eu) return;
+  estado.eu.admin = admin;
+  $('#btn-admin').hidden = !admin;
+  if (!admin) $('#modal-admin').hidden = true;
+});
+
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   pararTesteMic();

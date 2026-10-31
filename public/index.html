@@ -39,6 +39,7 @@
   <div id="app" hidden>
     <nav id="rail">
       <div class="rail-item" id="btn-dms" title="Mensagens diretas"><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="chat"></div></div>
+      <div class="rail-item" id="btn-admin" title="Painel de admin" hidden><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="escudo"></div></div>
       <div class="rail-sep"></div>
       <div id="lista-servidores"></div>
       <div class="rail-sep"></div>
@@ -529,6 +530,41 @@
     <div id="opcoes-boneco"></div>
   </div>
   <div id="previa-tela" hidden></div>
+
+  <div id="modal-admin" class="modal" hidden>
+    <div class="modal-caixa modal-config">
+      <nav class="cfg-abas">
+        <div class="cfg-abas-titulo">Admin do Concord</div>
+        <button type="button" data-adm="resumo">Visão geral</button>
+        <button type="button" data-adm="contas">Contas</button>
+        <button type="button" data-adm="servidores">Servidores</button>
+        <button type="button" data-adm="atividade">Atividade</button>
+      </nav>
+      <div class="cfg-conteudo">
+        <header>
+          <h2 id="adm-titulo">Visão geral</h2>
+          <button class="btn-icone" id="btn-fechar-admin" title="Fechar" data-icone="fechar"></button>
+        </header>
+        <section data-adm="resumo">
+          <div class="adm-numeros" id="adm-numeros"></div>
+          <div><h3>Online agora</h3><ul class="adm-lista" id="adm-online"></ul></div>
+          <div><h3>Servidor</h3><div class="cfg-versoes" id="adm-sistema"></div></div>
+        </section>
+        <section data-adm="contas" hidden>
+          <input id="adm-busca" placeholder="Buscar por nome ou usuário" autocomplete="off">
+          <ul class="adm-lista" id="adm-contas"></ul>
+        </section>
+        <section data-adm="servidores" hidden>
+          <ul class="adm-lista" id="adm-servidores"></ul>
+        </section>
+        <section data-adm="atividade" hidden>
+          <select id="adm-filtro"></select>
+          <ul class="adm-atividade" id="adm-atividade"></ul>
+          <button type="button" class="btn-secundario" id="adm-mais" hidden>Carregar mais</button>
+        </section>
+      </div>
+    </div>
+  </div>
 
   <div id="modal-eventos" class="modal" hidden>
     <div class="modal-caixa modal-eventos">
