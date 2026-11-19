@@ -1,5 +1,14 @@
 [
   {
+    "versao": "1.0.20",
+    "itens": [
+      "Ao vivo: ícone novo no menu da esquerda. Cole o link de uma live do YouTube e todo mundo do servidor recebe o aviso",
+      "A live abre com o chat do YouTube do lado; saindo da área, ela continua numa telinha no canto",
+      "Quem pôs a live ou um admin encerra; com mais de uma live, dá pra trocar pelas abas",
+      "Link do YouTube no chat ganhou o botão \"Pôr no Ao vivo\"; o assistir junto saiu da call"
+    ]
+  },
+  {
     "versao": "1.0.19",
     "itens": [
       "Live do YouTube no assistir junto: o chat da live aparece do lado do vídeo",
