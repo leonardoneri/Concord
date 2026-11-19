@@ -310,6 +310,30 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   await espera(100);
 }
 
+// ---------- arquivo grande por HTTP (até 1 GB na DM) ----------
+{
+  const duda = await pessoa('duda', 'Duda', convite);
+  const { dm: dmDuda } = await emit(leo, 'dm:abrir', { conta: duda.conta });
+  const enviar = (token, canal, dados, nome = 'jogo.zip') => fetch(`${URL_}/api/arquivo?canal=${canal}&nome=${encodeURIComponent(nome)}`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' }, body: dados,
+  }).then(async (r) => ({ status: r.status, ...(await r.json()) }));
+  const grande = Buffer.alloc(30 * 1024 * 1024, 7);
+  ok('sem login não envia', (await enviar('errado', dmDuda.id, Buffer.from('oi'))).status === 401);
+  ok('no servidor continua 25 MB', (await enviar(leo.token, geral, grande)).status === 413);
+  ok('quem não está na DM não envia nela', (await enviar(ana.token, dmDuda.id, Buffer.from('oi'))).status === 404);
+  const chegou = proximo(duda, 'mensagem', 5000);
+  const r = await enviar(leo.token, dmDuda.id, grande);
+  const m = await chegou;
+  ok('na DM vai arquivo de 30 MB', r.status === 200 && m?.texto?.endsWith('/jogo.zip') && m.conta === leo.conta);
+  const baixado = await fetch(`${URL_}${m.texto}`);
+  ok('e dá pra baixar inteiro', baixado.headers.get('content-disposition')?.startsWith('attachment') && (await baixado.arrayBuffer()).byteLength === grande.length);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(100)]);
+  const img = proximo(duda, 'mensagem');
+  await enviar(leo.token, dmDuda.id, png, 'foto.png');
+  ok('imagem pequena vira imagem normal', /^\/uploads\/[0-9a-f]+\.png$/.test((await img)?.texto ?? ''));
+  duda.disconnect();
+}
+
 // ---------- painel de admin (admin do Concord) ----------
 {
   ok('quem não é admin do Concord não vê o painel', !!(await emit(leo, 'adm:contas')).erro);

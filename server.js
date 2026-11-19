@@ -60,6 +60,8 @@ const idDeStream = (v) => (typeof v === 'string' && v.length <= 100 ? v : null);
 
 const MAX_IMAGEM = 10 * 1024 * 1024;
 const MAX_ARQUIVO = 25 * 1024 * 1024; // outros arquivos (vídeo, zip…)
+const MAX_ARQUIVO_DM = 1024 * 1024 * 1024; // na conversa direta dá pra mandar arquivo grande pro amigo
+const DISCO_MINIMO = 3 * 1024 * 1024 * 1024; // sobra sempre isso livre no disco do servidor
 const MAX_REACOES_DIFERENTES = 20; // emojis diferentes por mensagem
 const PAGINA = 50; // mensagens por vez no histórico
 const PAGINA_ATIVIDADE = 100; // linhas por vez na atividade do painel de admin
@@ -926,7 +928,69 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     },
   }));
 
+  // Arquivo por HTTP (vai direto pro disco, sem passar pela memória): até 25 MB nos servidores, 1 GB na DM.
+  // POST /api/arquivo?canal=&nome=&resposta=  com  Authorization: Bearer <token>  e o arquivo no corpo
+  app.post('/api/arquivo', async (req, res) => {
+    const falhar = (status, erro) => {
+      req.resume(); // descarta o resto do corpo
+      res.status(status).json({ erro });
+    };
+    const conta = sql.contaPorToken.get(hashToken(String(req.headers.authorization ?? '').replace(/^Bearer /, '')));
+    if (!conta) return falhar(401, 'Sua sessão expirou. Entra de novo.');
+    const c = canalDoMembro(req.query.canal, conta.id, 'texto');
+    if (!c) return falhar(404, 'Esse canal não existe mais');
+    const limite = ehDm(c) ? MAX_ARQUIVO_DM : MAX_ARQUIVO;
+    const tamanho = Number(req.headers['content-length']);
+    const maximo = ehDm(c) ? '1 GB' : '25 MB (na conversa direta vai até 1 GB)';
+    if (!tamanho) return falhar(411, 'Arquivo vazio');
+    if (tamanho > limite) return falhar(413, `Arquivo grande demais (máx. ${maximo})`);
+    try {
+      const { bavail, bsize } = await fs.promises.statfs(pastaUploads);
+      if (bavail * bsize - tamanho < DISCO_MINIMO) return falhar(507, 'O servidor está sem espaço pra esse arquivo');
+    } catch {}
+
+    const pasta = path.join(pastaUploads, randomBytes(12).toString('hex'));
+    const limpo = limparNomeArquivo(req.query.nome);
+    const destino = path.join(pasta, limpo);
+    let recebido = 0;
+    let inicio = Buffer.alloc(0); // primeiros bytes: descobre se é imagem
+    try {
+      await fs.promises.mkdir(pasta);
+      await new Promise((ok, erro) => {
+        const saida = fs.createWriteStream(destino);
+        req.on('data', (parte) => {
+          recebido += parte.length;
+          if (inicio.length < 16) inicio = Buffer.concat([inicio, parte.subarray(0, 16)]);
+          if (recebido > limite) req.destroy(new Error('grande demais'));
+        });
+        req.on('aborted', () => erro(new Error('cancelado')));
+        req.on('error', erro);
+        saida.on('error', erro);
+        saida.on('finish', ok);
+        req.pipe(saida);
+      });
+      if (recebido !== tamanho) throw new Error('incompleto');
+    } catch {
+      await fs.promises.rm(pasta, { recursive: true, force: true });
+      if (!res.headersSent && !req.destroyed) res.status(400).json({ erro: 'O envio foi interrompido' });
+      return;
+    }
+    let url = `/uploads/${path.basename(pasta)}/${encodeURIComponent(limpo)}`;
+    // imagem pequena: fica como as outras imagens (aparece na conversa)
+    const ext = recebido <= MAX_IMAGEM && extensaoDaImagem(inicio);
+    if (ext) {
+      const arquivo = `${randomBytes(12).toString('hex')}.${ext}`;
+      await fs.promises.rename(destino, path.join(pastaUploads, arquivo));
+      await fs.promises.rm(pasta, { recursive: true, force: true });
+      url = `/uploads/${arquivo}`;
+    }
+    publicar({ nome: conta.nome, cor: corDaConta(conta), conta: conta.id }, c, url, req.query.resposta || null);
+    res.json({});
+  });
+
   const http = createServer(app);
+  // o Node corta pedido que demora mais de 5 min: arquivo de 1 GB numa internet comum leva mais que isso
+  http.requestTimeout = 3 * 60 * 60 * 1000;
   const io = new Server(http, { maxHttpBufferSize: MAX_ARQUIVO + 64 * 1024 });
 
   // socket.id -> usuário. O `id` do usuário é a sessão da aba (não o socket): continua o mesmo quando
@@ -1059,6 +1123,14 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       so.emit('conta:encerrada', motivo);
       so.disconnect(true);
     });
+  }
+
+  // `u` = { nome, cor, conta } de quem escreveu
+  function publicar(u, c, texto, resposta = null) {
+    // só responde mensagem do mesmo canal
+    if (resposta && sql.mensagem.get(Number(resposta))?.canal_id !== c.id) resposta = null;
+    const { lastInsertRowid } = sql.inserirMensagem.run(c.nome, c.id, u.nome, u.cor, texto, Date.now(), u.conta, resposta ? Number(resposta) : null);
+    emitirNoCanal(c, 'mensagem', msgPublica(sql.mensagem.get(Number(lastInsertRowid)), c.servidor));
   }
 
   // Manda um evento pra quem vê o canal (servidor inteiro, ou as duas pessoas da DM)
@@ -1742,13 +1814,6 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       const c = canalDoMembro(canal, u.conta, 'texto');
       ack(c ? sql.fixadas.all(c.id).map((m) => msgPublica(m, c.servidor)) : []);
     });
-
-    function publicar(u, c, texto, resposta = null) {
-      // só responde mensagem do mesmo canal
-      if (resposta && sql.mensagem.get(Number(resposta))?.canal_id !== c.id) resposta = null;
-      const { lastInsertRowid } = sql.inserirMensagem.run(c.nome, c.id, u.nome, u.cor, texto, Date.now(), u.conta, resposta ? Number(resposta) : null);
-      emitirNoCanal(c, 'mensagem', msgPublica(sql.mensagem.get(Number(lastInsertRowid)), c.servidor));
-    }
 
     quando('mensagem', (u, { canal, texto, resposta } = {}) => {
       const c = canalDoMembro(canal, u.conta, 'texto');

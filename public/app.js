@@ -84,6 +84,7 @@ const SEM_SERVIDOR = { id: null, nome: '', icone: null, dono: null, convite: '',
 const DM = { id: 'dm', nome: 'Mensagens diretas', icone: null, dono: null, convite: '', canais: [] };
 const PAGINA = 50; // mensagens por vez no histórico (igual ao servidor)
 const MAX_ARQUIVO = 25 * 1024 * 1024;
+const MAX_ARQUIVO_DM = 1024 * 1024 * 1024; // na conversa direta
 // o app desktop põe "Concord/1.0.8" no user agent (vale até nas versões antigas do app)
 const VERSAO_APP = navigator.userAgent.match(/concord\/(\d+\.\d+\.\d+)/i)?.[1] ?? null;
 function compararVersao(a, b) {
@@ -129,10 +130,8 @@ const volumes = lerStorage('volumes', {});
 const ajustes = lerStorage('ajustes', {});
 const dispositivos = lerStorage('dispositivos', { mic: '', cam: '', saida: '' });
 const transmissao = lerStorage('transmissao', { resolucao: '1080', fps: 30 });
-// "mudo fixo": vídeo do assistir junto / transmissões de tela começam sem som até eu desligar isso
+// mutei o vídeo do assistir junto / as transmissões de tela: continua mudo nos próximos até eu desmutar
 const mudoFixo = lerStorage('mudoFixo', { videos: false, telas: false });
-let somDoVideo = false; // com o mudo fixo dos vídeos: liguei o som (vale até sair da sala)
-const telasComSom = new Set(); // com o mudo fixo das telas: transmissões (id do stream) que eu quis ouvir
 let meuBoneco = lerStorage('boneco', null); // como é o meu boneco no mapa da chamada
 
 let toastTimer;
@@ -2190,20 +2189,40 @@ $('#form-msg').addEventListener('submit', (e) => {
 });
 
 // ---------- arquivos (imagem, vídeo, zip…) ----------
-async function enviarArquivo(arquivo) {
+const tamanhoLegivel = (b) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(2)} GB` : `${Math.max(0.1, b / 1024 ** 2).toFixed(1)} MB`);
+
+// vai por HTTP direto pro disco do servidor (arquivo grande não passa pela conexão do chat)
+function enviarArquivo(arquivo) {
   if (!arquivo) return;
-  if (arquivo.size > MAX_ARQUIVO) return avisar(`${arquivo.name || 'Esse arquivo'} é grande demais (máx. 25 MB).`);
+  const limite = emDm() ? MAX_ARQUIVO_DM : MAX_ARQUIVO;
+  if (!arquivo.size) return avisar(`${arquivo.name || 'Esse arquivo'} está vazio.`);
+  if (arquivo.size > limite) {
+    return avisar(`${arquivo.name || 'Esse arquivo'} é grande demais (máx. ${emDm() ? '1 GB' : '25 MB; na conversa direta vai até 1 GB'}).`, 8000);
+  }
   const canal = estado.canalTexto;
   const resposta = respondendo?.id ?? null;
   respondendo = null;
   renderResposta();
-  avisar(`Enviando ${arquivo.name || 'arquivo'}…`, 120000);
-  const dados = await arquivo.arrayBuffer();
-  socket.timeout(120000).emit('arquivo', { canal, nome: arquivo.name, dados, resposta }, (err, res) => {
-    if (err) return avisar('Não deu pra enviar o arquivo (conexão lenta?).');
-    if (res?.erro) return avisar(res.erro);
+  const nome = arquivo.name || 'arquivo';
+  const total = tamanhoLegivel(arquivo.size);
+  const xhr = new XMLHttpRequest();
+  const params = new URLSearchParams({ canal, nome });
+  if (resposta) params.set('resposta', resposta);
+  xhr.open('POST', `/api/arquivo?${params}`);
+  xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+  avisar(`Enviando ${nome} (${total})…`, 600000);
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) avisar(`Enviando ${nome}: ${Math.floor((e.loaded / e.total) * 100)}% de ${total}`, 600000);
+  };
+  xhr.onload = () => {
+    let res = {};
+    try { res = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status !== 200) return avisar(res.erro ?? 'Não deu pra enviar o arquivo.', 8000);
     $('#toast').hidden = true;
-  });
+  };
+  xhr.onerror = () => avisar(`O envio de ${nome} caiu no meio (conexão?). Tenta de novo.`, 8000);
+  xhr.send(arquivo);
 }
 
 $('#input-msg').addEventListener('paste', (e) => {
@@ -2467,8 +2486,6 @@ function sairVoz(avisarServidor = true) {
   estado.voz = null;
   estado.vozInfo = null;
   estado.assistir = null;
-  somDoVideo = false;
-  telasComSom.clear();
   fecharPlayer();
   aplicarMapa(null);
   Object.assign(minhaRede, { ping: null, perda: null, ruinsSeguidas: 0, enviado: null });
@@ -3097,7 +3114,7 @@ function atualizarAudios() {
       }
       aplicarSaida(audio);
       const silenciado = estado.surdo || (tipo === 'mic' && ajustes[u.nome]?.mudo)
-        || (tipo === 'tela' && mudoFixo.telas && !telasComSom.has(u.tela));
+        || (tipo === 'tela' && mudoFixo.telas);
       const volume = silenciado ? 0 : volumeDe(u.nome, tipo) * (tipo === 'mic' ? fatorMapa(id) : 1);
       // acima de 100% o <audio> não alcança: toca pelo GainNode e o <audio> fica mudo
       // (mas continua tocando — o Chrome só entrega o áudio do WebRTC se houver um elemento)
@@ -3180,21 +3197,15 @@ function abrirMenuPessoa(id, evento) {
   const itens = [titulo, slider('Volume do usuário', 'mic'), opcao('Silenciar pra mim', 'mudo')];
   if (u.tela) {
     itens.push(el('hr'), slider('Volume da transmissão', 'tela'));
-    if (mudoFixo.telas) {
-      const ouvir = el('label', 'menu-opcao');
-      const c = el('input');
-      c.type = 'checkbox';
-      c.checked = telasComSom.has(u.tela);
-      c.onchange = () => {
-        if (c.checked) telasComSom.add(u.tela);
-        else telasComSom.delete(u.tela);
-        atualizarAudios();
-      };
-      const texto = el('span', null, 'Ouvir esta transmissão');
-      texto.append(el('small', null, 'As transmissões começam sem som (Configurações > Voz e vídeo)'));
-      ouvir.append(texto, c);
-      itens.push(ouvir);
-    }
+    const mutar = el('label', 'menu-opcao');
+    const c = el('input');
+    c.type = 'checkbox';
+    c.checked = mudoFixo.telas;
+    c.onchange = () => mudarMudoFixo('telas', c.checked);
+    const texto = el('span', null, 'Mutar transmissões');
+    texto.append(el('small', null, 'Vale pra todas, até você desmarcar'));
+    mutar.append(texto, c);
+    itens.push(mutar);
     itens.push(opcao('Ocultar transmissão', 'ocultarTela', 'Para de receber o vídeo da tela'));
   }
   itens.push(el('hr'), opcao('Ocultar câmera', 'ocultarCam'), opcao('Qualidade baixa', 'baixa', 'Economiza internet: recebe o vídeo em resolução menor'));
@@ -3960,7 +3971,7 @@ let ytPronto = null;
 let recebidoEm = 0; // quando chegou o estado (pra calcular onde o vídeo deveria estar agora)
 let aplicandoAte = 0; // mudanças feitas pelo próprio app (não são cliques da pessoa)
 let mudoAssistir = null; // como o player está agora (null = ainda não sei)
-const videoSemSom = () => estado.surdo || (mudoFixo.videos && !somDoVideo);
+const videoSemSom = () => estado.surdo || mudoFixo.videos;
 
 // { video, lista }: vídeo e/ou playlist de um link do YouTube
 function linkDoYoutube(texto) {
@@ -4219,43 +4230,24 @@ socket.on('assistir', aplicarAssistir);
 function renderSomAssistir() {
   const b = $('#btn-som-assistir');
   const mudo = videoSemSom();
-  b.textContent = mudo ? '🔇 Sem som' : '🔊 Com som';
-  b.title = mudoFixo.videos
-    ? 'Os vídeos começam sem som (Configurações > Voz e vídeo). Clique pra ouvir este.'
-    : 'Clique pra deixar todos os vídeos sem som até você ligar de novo';
+  b.textContent = mudo ? '🔇 Desmutar' : '🔊 Mutar';
+  b.title = mudo ? 'Os próximos vídeos também ficam mudos até você desmutar' : 'Muta este e os próximos vídeos, até você desmutar';
 }
 $('#btn-som-assistir').onclick = () => {
   if (estado.surdo) return avisar('Você está com o som desligado (surdo).');
-  if (mudoFixo.videos) {
-    // mudo fixo ligado: o botão liga/desliga o som só enquanto estou nesta sala
-    somDoVideo = !somDoVideo;
-  } else {
-    // sem mudo fixo: desligar o som aqui já liga o mudo fixo (o próximo vídeo continua mudo)
-    mudarMudoFixo('videos', true);
-    somDoVideo = false;
-  }
-  sincronizarPlayer();
-  renderSomAssistir();
+  mudarMudoFixo('videos', !mudoFixo.videos);
 };
 
 function mudarMudoFixo(tipo, ligado) {
   mudoFixo[tipo] = ligado;
   salvarStorage('mudoFixo', mudoFixo);
   if (tipo === 'videos') {
-    somDoVideo = false;
     sincronizarPlayer();
     renderSomAssistir();
   } else {
-    telasComSom.clear();
     atualizarAudios();
   }
-  $('#cfg-mudo-videos').checked = mudoFixo.videos;
-  $('#cfg-mudo-telas').checked = mudoFixo.telas;
 }
-$('#cfg-mudo-videos').checked = mudoFixo.videos;
-$('#cfg-mudo-telas').checked = mudoFixo.telas;
-$('#cfg-mudo-videos').onchange = (e) => mudarMudoFixo('videos', e.target.checked);
-$('#cfg-mudo-telas').onchange = (e) => mudarMudoFixo('telas', e.target.checked);
 renderSomAssistir();
 
 // Pular pela barra do YouTube nem sempre gera evento: percebe o pulo pelo tempo do vídeo
