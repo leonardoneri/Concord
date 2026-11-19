@@ -1483,7 +1483,7 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .live-textos p { margin: 2px 0 0; font-size: 13px; color: var(--texto-2); }
 .selo-live { flex: none; padding: 1px 6px; border-radius: 4px; background: var(--vermelho); color: #fff; font-size: 11px; font-weight: 700; }
 .live-cabeca .btn-secundario { padding: 6px 12px; font-size: 13px; }
-#btn-encerrar-live { color: #f38b8b; }
+#btn-encerrar-live:hover { background: var(--vermelho); }
 .live-abas { display: flex; flex-wrap: wrap; gap: 8px; }
 .live-abas .btn-secundario { padding: 6px 12px; font-size: 13px; background: var(--sidebar); }
 .live-abas .btn-secundario.ativa { background: var(--ativo); }
