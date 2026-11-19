@@ -1357,10 +1357,16 @@ function renderPainel() {
   $$('.btn-tela').forEach((b) => b.classList.toggle('ligado', !!estado.tela));
 }
 
+let flutuanteFechada = false; // escondi a telinha: volta quando eu abrir a call de novo
 function renderView() {
   const naVoz = estado.view === 'voz' && !!estado.voz;
+  if (naVoz) flutuanteFechada = false;
+  // fora da tela da call com vídeo passando: o vídeo fica numa telinha no canto
+  const flutuante = !naVoz && !!estado.voz && !!estado.assistir && !flutuanteFechada;
   $('#view-texto').hidden = naVoz;
-  $('#view-voz').hidden = !naVoz;
+  $('#view-voz').hidden = !naVoz && !flutuante;
+  $('#view-voz').classList.toggle('flutuante', flutuante);
+  $('#ampliar-assistir span').textContent = flutuante ? `Voltar pra call ${estado.vozInfo?.canal ?? ''}` : 'Assistindo junto · clique pra ampliar';
   $('#icone-canal').replaceChildren(icone(naVoz ? 'voz' : emDm() ? 'arroba' : 'hash'));
   const texto = canalPorId(estado.canalTexto);
   $('#titulo-canal').textContent = naVoz ? estado.vozInfo?.canal ?? '' : texto?.nome ?? '';
@@ -2854,7 +2860,19 @@ function posicionarMini() {
 }
 new ResizeObserver(posicionarMini).observe($('#grid'));
 $('#tira').addEventListener('scroll', posicionarMini);
-$('#ampliar-assistir').onclick = () => focarTile('assistir');
+$('#ampliar-assistir').onclick = () => {
+  if (!$('#view-voz').classList.contains('flutuante')) return focarTile('assistir');
+  // telinha: volta pra call (abrindo o servidor dela se eu estiver em outro)
+  const srv = estado.vozInfo?.servidorId;
+  if (srv != null && srv !== estado.servidor.id) abrirServidor(srv);
+  estado.view = 'voz';
+  render();
+};
+$('#fechar-flutuante').onclick = (e) => {
+  e.stopPropagation();
+  flutuanteFechada = true;
+  renderView();
+};
 $('#btn-diminuir-assistir').onclick = () => focarTile('assistir');
 
 function renderGrid() {
@@ -4052,15 +4070,19 @@ function posicaoEsperada() {
   return a.tocando ? a.posicao + (Date.now() - recebidoEm) / 1000 : a.posicao;
 }
 
+// live do YouTube: todo mundo assiste "ao vivo", então não acerta a posição de ninguém
+const ehLive = () => !!player?.getVideoData?.()?.isLive;
+
 function sincronizarPlayer() {
   const a = estado.assistir;
   if (!player?.getPlayerState || !a || playerVideo !== a.video) return;
+  renderChatLive();
   const st = player.getPlayerState();
   // acabou: espera o servidor mandar o próximo (a não ser que seja o mesmo vídeo de novo na fila)
   if (st === YT.PlayerState.ENDED && !(a.tocando && posicaoEsperada() < 3)) return;
   const atual = player.getCurrentTime?.() ?? 0;
   const esperada = posicaoEsperada();
-  if (Math.abs(atual - esperada) > 2) {
+  if (!ehLive() && Math.abs(atual - esperada) > 2) {
     aplicandoAte = Date.now() + 1500;
     player.seekTo(esperada, true);
   }
@@ -4098,15 +4120,38 @@ function mudouPlayer(e) {
   if (![S.PLAYING, S.PAUSED].includes(e.data)) return;
   const tocando = e.data === S.PLAYING;
   const posicao = player.getCurrentTime();
-  if (tocando === estado.assistir.tocando && Math.abs(posicao - posicaoEsperada()) < 1.5) return;
+  if (tocando === estado.assistir.tocando && (ehLive() || Math.abs(posicao - posicaoEsperada()) < 1.5)) return;
   estado.assistir = { ...estado.assistir, tocando, posicao };
   recebidoEm = Date.now();
   socket.emit('assistir:controle', { tocando, posicao });
 }
 
+// chat da live ao lado do vídeo (só aparece em live; o botão "Chat" esconde/mostra)
+let chatVisivel = lerStorage('chatLive', true);
+let chatDoVideo = null;
+function renderChatLive() {
+  const live = !!estado.assistir && playerVideo === estado.assistir.video && ehLive();
+  $('#btn-chat-assistir').hidden = !live;
+  $('#btn-chat-assistir').textContent = chatVisivel ? 'Esconder chat' : 'Chat';
+  $('#chat-assistir').hidden = !live || !chatVisivel;
+  const video = live && chatVisivel ? playerVideo : null;
+  if (video === chatDoVideo) return;
+  chatDoVideo = video;
+  // o YouTube só deixa mostrar o chat se disser em qual site ele está
+  $('#iframe-chat').src = video
+    ? `https://www.youtube.com/live_chat?v=${video}&embed_domain=${encodeURIComponent(location.hostname)}&dark_theme=1`
+    : 'about:blank';
+}
+$('#btn-chat-assistir').onclick = () => {
+  chatVisivel = !chatVisivel;
+  salvarStorage('chatLive', chatVisivel);
+  renderChatLive();
+};
+
 function renderInfoAssistir() {
   const a = estado.assistir;
   if (!a) return;
+  renderChatLive();
   const titulo = a.titulo ?? (playerVideo === a.video ? player?.getVideoData?.().title : null);
   const n = a.fila?.length ?? 1;
   $('#info-assistir').textContent = `${a.por} colocou${titulo ? `: ${titulo}` : ' um vídeo'}${n > 1 ? ` · ${a.atual + 1} de ${n}` : ''}`;
@@ -4165,6 +4210,7 @@ function fecharPlayer() {
   player = null;
   playerVideo = null;
   mudoAssistir = null;
+  renderChatLive();
   $('#assistir').hidden = true;
   // o destroy troca a div do player por nada: recria pro próximo vídeo
   if (!$('#player-assistir')) $('.video-assistir').append(Object.assign(document.createElement('div'), { id: 'player-assistir' }));
@@ -4176,9 +4222,11 @@ async function aplicarAssistir(a) {
   if (!estado.assistir) {
     fecharPlayer();
     renderGrid();
+    renderView(); // some a telinha
     return;
   }
   $('#assistir').hidden = false;
+  renderView(); // começou vídeo com a call fora da tela: aparece a telinha
   renderInfoAssistir();
   renderFila();
   renderGrid();

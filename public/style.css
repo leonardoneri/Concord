@@ -1508,6 +1508,32 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 #ampliar-assistir:hover span { background: var(--acento); }
 @media (max-width: 900px) { #fila-assistir { width: 200px; } .item-fila img { display: none; } }
 
+/* chat da live do lado do vídeo */
+#chat-assistir { width: 340px; flex: none; display: flex; flex-direction: column; background: var(--sidebar); border-radius: 8px; overflow: hidden; }
+#chat-assistir[hidden] { display: none; }
+#chat-assistir iframe { flex: 1; width: 100%; border: 0; background: var(--sidebar); }
+#grid.assistindo-mini #chat-assistir { display: none; }
+@media (max-width: 1100px) { #chat-assistir { width: 260px; } }
+
+/* telinha: fora da tela da call, o vídeo continua num cantinho (a call não some do DOM pro YouTube não recarregar) */
+#fechar-flutuante { display: none; }
+#view-voz.flutuante { position: absolute; width: 0; height: 0; overflow: visible; visibility: hidden; pointer-events: none; }
+#view-voz.flutuante #assistir {
+  position: fixed !important; left: auto !important; top: auto !important; right: 20px !important; bottom: 96px !important;
+  width: 384px !important; height: 216px !important; z-index: 15; gap: 0;
+  visibility: visible !important; pointer-events: auto; border-radius: 8px; overflow: hidden; box-shadow: 0 8px 24px #000a;
+}
+#view-voz.flutuante .barra-assistir, #view-voz.flutuante #fila-assistir, #view-voz.flutuante #chat-assistir { display: none; }
+#view-voz.flutuante .video-assistir { border-radius: 0; }
+#view-voz.flutuante #ampliar-assistir {
+  display: flex; align-items: flex-end; position: absolute; inset: 0; padding: 8px; border: 0; background: transparent; cursor: pointer;
+}
+#view-voz.flutuante #fechar-flutuante {
+  display: grid; position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 50%; background: #000b; color: #fff; z-index: 1;
+}
+#view-voz.flutuante #fechar-flutuante:hover { background: var(--vermelho); }
+@media (max-width: 760px) { #view-voz.flutuante #assistir { width: 240px !important; height: 135px !important; right: 12px !important; } }
+
 /* ---------- formatação de texto ---------- */
 .linha code.codigo { background: var(--rodape); border-radius: 4px; padding: 1px 5px; font-family: Consolas, 'Courier New', monospace; font-size: 0.875em; }
 .linha pre.bloco-codigo { margin: 4px 0; padding: 8px 10px; background: var(--rodape); border: 1px solid var(--borda); border-radius: 6px; max-width: 100%; overflow-x: auto; white-space: pre; }

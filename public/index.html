@@ -127,7 +127,7 @@
               <button type="button" class="btn-icone" id="btn-cancelar-resposta" title="Cancelar resposta (Esc)" data-icone="fechar"></button>
             </div>
             <div class="caixa-msg">
-              <button type="button" class="mais" id="btn-anexar" title="Enviar arquivo, até 25 MB (ou cole com Ctrl+V / arraste aqui)" data-icone="mais"></button>
+              <button type="button" class="mais" id="btn-anexar" title="Enviar arquivo, até 25 MB (1 GB na conversa direta). Também dá pra colar com Ctrl+V ou arrastar aqui" data-icone="mais"></button>
               <input type="file" id="input-arquivo" multiple hidden>
               <button type="button" class="mais" id="btn-enquete" title="Criar enquete" data-icone="enquete"></button>
               <input id="input-msg" maxlength="2000" autocomplete="off">
@@ -147,11 +147,17 @@
                   <div class="titulo-fila" id="titulo-fila">Fila</div>
                   <ol id="lista-fila"></ol>
                 </aside>
+                <aside id="chat-assistir" hidden>
+                  <div class="titulo-fila">Chat da live</div>
+                  <iframe id="iframe-chat" title="Chat da live do YouTube"></iframe>
+                </aside>
               </div>
               <button type="button" id="ampliar-assistir" title="Ampliar o vídeo"><span>Assistindo junto · clique pra ampliar</span></button>
+              <button type="button" class="btn-icone" id="fechar-flutuante" title="Esconder a telinha (o vídeo continua na call)" data-icone="fechar"></button>
               <div class="barra-assistir">
                 <span id="info-assistir"></span>
                 <button type="button" class="btn-secundario" id="btn-som-assistir"></button>
+                <button type="button" class="btn-secundario" id="btn-chat-assistir" hidden>Chat</button>
                 <button type="button" class="btn-secundario" id="btn-fila-assistir">Fila</button>
                 <button type="button" class="btn-secundario" id="btn-proximo-video">Próximo ⏭</button>
                 <button type="button" class="btn-secundario" id="btn-trocar-video">+ Vídeo</button>
