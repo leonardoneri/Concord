@@ -215,8 +215,24 @@ function limparBoneco(b) {
   return limpo;
 }
 
-// ---------- títulos do YouTube (pra fila do "assistir junto") ----------
-const MAX_FILA = 200;
+// ---------- YouTube (área "Ao vivo") ----------
+const MAX_LIVES = 5; // lives ao mesmo tempo por servidor
+// id do vídeo de um link do YouTube (watch, youtu.be, /live/, /shorts/, /embed/) ou o próprio id
+function idDoYoutube(texto) {
+  texto = String(texto ?? '').trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(texto)) return texto;
+  try {
+    const u = new URL(texto);
+    const host = u.hostname.replace(/^(www|m|music)\./, '');
+    if (host === 'youtu.be') return u.pathname.slice(1, 12).match(/^[A-Za-z0-9_-]{11}$/)?.[0] ?? null;
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      const v = u.searchParams.get('v');
+      if (v) return /^[A-Za-z0-9_-]{11}/.test(v) ? v.slice(0, 11) : null;
+      return u.pathname.match(/^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{11})/)?.[1] ?? null;
+    }
+  } catch {}
+  return null;
+}
 const titulosYoutube = new Map(); // id do vídeo -> título (null = privado/apagado)
 async function tituloYoutube(id) {
   if (titulosYoutube.has(id)) return titulosYoutube.get(id);
@@ -542,6 +558,15 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       emoji TEXT NOT NULL,
       PRIMARY KEY (mensagem, conta, emoji)
     );
+    -- área "Ao vivo": lives do YouTube que alguém pôs pra galera de um servidor
+    CREATE TABLE IF NOT EXISTS lives (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      servidor INTEGER NOT NULL,
+      video TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      conta INTEGER NOT NULL,
+      criado_em INTEGER NOT NULL
+    );
     -- o que cada um fez (painel de admin); nome = como a pessoa se chamava na hora
     CREATE TABLE IF NOT EXISTS atividades (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -716,6 +741,15 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     compartilhamServidor: db.prepare('SELECT 1 FROM membros a JOIN membros b ON a.servidor = b.servidor WHERE a.conta = ? AND b.conta = ?'),
 
     // painel de admin (contas.admin = admin do Concord inteiro, não de um servidor)
+    livesDa: db.prepare(`SELECT l.*, s.nome AS servidor_nome, c.nome AS por FROM lives l
+      JOIN membros m ON m.servidor = l.servidor AND m.conta = ? JOIN servidores s ON s.id = l.servidor
+      LEFT JOIN contas c ON c.id = l.conta ORDER BY l.id`),
+    live: db.prepare('SELECT * FROM lives WHERE id = ?'),
+    liveDoVideo: db.prepare('SELECT 1 FROM lives WHERE servidor = ? AND video = ?'),
+    contarLives: db.prepare('SELECT COUNT(*) AS n FROM lives WHERE servidor = ?'),
+    criarLive: db.prepare('INSERT INTO lives (servidor, video, titulo, conta, criado_em) VALUES (?, ?, ?, ?, ?)'),
+    apagarLive: db.prepare('DELETE FROM lives WHERE id = ?'),
+    apagarLivesDo: db.prepare('DELETE FROM lives WHERE servidor = ?'),
     registrar: db.prepare('INSERT INTO atividades (conta, nome, tipo, texto, criado_em) VALUES (?, ?, ?, ?, ?)'),
     atividades: db.prepare(`SELECT * FROM atividades WHERE (?1 IS NULL OR conta = ?1) AND (?2 IS NULL OR id < ?2)
       ORDER BY id DESC LIMIT ${PAGINA_ATIVIDADE}`),
@@ -997,8 +1031,6 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   // a conexão cai e volta (ex.: servidor reiniciando), então a chamada WebRTC não precisa recomeçar
   const usuarios = new Map();
   const previas = new Map(); // id do usuário -> miniatura da tela que a pessoa está transmitindo
-  // "Assistir junto": canal de voz -> { video, por, tocando, posicao, em } (posicao em segundos no instante `em`)
-  const assistindo = new Map();
   // mapa de cada canal de voz que tem (fica no banco; aqui é só o cache). A posição e o boneco ficam em cada usuário: u.pos, u.boneco
   const mapas = new Map();
   function mapaDoCanal(id) {
@@ -1046,7 +1078,6 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     emitirServidor(srv);
     const privadas = canaisDe(srv, 'voz').filter((c) => c.privado);
     tirarDaVoz((o) => privadas.some((c) => c.id === o.voz && !podeVerCanal(c, o.conta)));
-    limparAssistir();
     emitirPresenca();
   }
   const emitirPerfis = (srv) => io.to(sala(srv)).emit('perfis', { servidor: srv, perfis: perfisDo(srv) });
@@ -1088,6 +1119,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     sql.apagarCargosDo.run(s.id);
     sql.apagarMembroCargosDo.run(s.id);
     sql.apagarEventosDo.run(s.id);
+    sql.apagarLivesDo.run(s.id);
     io.to(sala(s.id)).emit('servidor:removido', { id: s.id, nome: s.nome });
     io.in(sala(s.id)).socketsLeave(sala(s.id));
     for (const o of usuarios.values()) if (o.servidor === s.id) o.servidor = null;
@@ -1150,47 +1182,6 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
   }
 
   // Tira da call quem estava num canal de voz que deixou de existir / que a pessoa não pode mais ver
-  // Estado do "assistir junto" com a posição de agora (quem recebe não precisa acertar relógio)
-  // a = { fila: [{ video, titulo, por }], atual (índice na fila), tocando, posicao, em }
-  function assistirPublico(canal) {
-    const a = assistindo.get(canal);
-    if (!a) return null;
-    const posicao = a.tocando ? a.posicao + (Date.now() - a.em) / 1000 : a.posicao;
-    const item = a.fila[a.atual];
-    return {
-      video: item.video, titulo: item.titulo ?? null, por: item.por, tocando: a.tocando, posicao, atual: a.atual,
-      fila: a.fila.map(({ video, titulo, por }) => ({ video, titulo: titulo ?? null, por })),
-    };
-  }
-  // títulos dos vídeos da fila chegam aos poucos (oEmbed do YouTube não precisa de chave)
-  async function buscarTitulos(canal) {
-    const a = assistindo.get(canal);
-    if (!a || a.buscandoTitulos) return;
-    a.buscandoTitulos = true;
-    try {
-      let novos = 0;
-      for (let i = 0; i < a.fila.length; i++) {
-        if (a.fila[i].titulo !== undefined) continue;
-        a.fila[i].titulo = await tituloYoutube(a.fila[i].video);
-        if (assistindo.get(canal) !== a) return;
-        if (++novos % 10 === 0) emitirAssistir(canal);
-      }
-      if (novos) emitirAssistir(canal);
-    } finally {
-      a.buscandoTitulos = false;
-    }
-  }
-  function emitirAssistir(canal) {
-    const dados = assistirPublico(canal);
-    for (const o of usuarios.values()) if (o.voz === canal) io.to(o.socket).emit('assistir', dados);
-  }
-  // sala vazia: para o vídeo
-  function limparAssistir() {
-    for (const canal of assistindo.keys()) {
-      if (![...usuarios.values()].some((o) => o.voz === canal)) assistindo.delete(canal);
-    }
-  }
-
   // mapa: o desenho, quem está na sala, onde está e com que boneco
   function mapaPublico(canal) {
     const mapa = mapaDoCanal(canal);
@@ -1537,8 +1528,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       tirarDaVoz((o) => o.conta === alvo.conta && salas.has(o.voz), u.nome);
       registrar(u.conta, 'voz', `desconectou ${alvo.nome} da call em ${nomeServidor(srv)}`);
       emitirPresenca();
-      limparAssistir();
-      ack({});
+        ack({});
     });
 
     // ---------- status ----------
@@ -2059,7 +2049,6 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       previas.delete(u.id);
       const outros = [...usuarios.values()].filter((o) => o.voz === c.id && o.id !== u.id).map((o) => o.id);
       emitirPresenca();
-      limparAssistir(); // se trocou de sala, a antiga pode ter ficado vazia
       ack(outros);
     });
 
@@ -2124,79 +2113,42 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       Object.assign(u, { voz: null, mic: null, camera: null, tela: null, rede: null, pos: null });
       previas.delete(u.id);
       emitirPresenca();
-      limparAssistir();
+      });
+
+    // ---------- área "Ao vivo": lives do YouTube dos meus servidores ----------
+    const livePublica = (l) => ({
+      id: l.id, servidor: l.servidor, servidorNome: l.servidor_nome, video: l.video, titulo: l.titulo,
+      conta: l.conta, por: l.por ?? 'alguém', criado_em: l.criado_em,
+    });
+    quando('live:lista', (u, _, ack) => ack(sql.livesDa.all(u.conta).map(livePublica)));
+
+    // { servidor, link, titulo }: qualquer membro põe uma live pro servidor
+    quando('live:iniciar', async (u, { servidor, link, titulo } = {}, ack) => {
+      servidor = Number(servidor);
+      if (!ehMembro(servidor, u.conta)) return ack({ erro: 'Você não está nesse servidor' });
+      const video = idDoYoutube(link);
+      if (!video) return ack({ erro: 'Confira o link do YouTube' });
+      if (sql.liveDoVideo.get(servidor, video)) return ack({ erro: 'Esse vídeo já está no Ao vivo' });
+      if (sql.contarLives.get(servidor).n >= MAX_LIVES) return ack({ erro: `Dá pra ter no máximo ${MAX_LIVES} lives ao mesmo tempo` });
+      titulo = String(titulo ?? '').replace(/[\p{C}]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 100)
+        || (await tituloYoutube(video))?.slice(0, 100) || 'Live';
+      const { lastInsertRowid } = sql.criarLive.run(servidor, video, titulo, u.conta, Date.now());
+      const id = Number(lastInsertRowid);
+      registrar(u.conta, 'live', `pôs a live "${titulo}" em ${nomeServidor(servidor)}`);
+      io.to(sala(servidor)).emit('live:mudou', { id, servidor, comecou: true, titulo, por: u.nome, conta: u.conta });
+      ack({ id });
     });
 
-    // ---------- assistir junto (YouTube sincronizado na sala) ----------
-    const tocarIndice = (a, i) => Object.assign(a, { atual: i, tocando: true, posicao: 0, em: Date.now() });
-    // videos = ids; agora = toca já (entra logo depois do atual); senão vai pro fim da fila.
-    // inicio = qual dos vídeos começa (playlist aberta num vídeo do meio)
-    function adicionarVideos(u, { videos, agora, inicio } = {}, ack) {
-      if (u.voz == null) return ack({ erro: 'Entra numa sala de voz primeiro' });
-      if (!Array.isArray(videos) || !videos.length || !videos.every((v) => typeof v === 'string' && /^[A-Za-z0-9_-]{11}$/.test(v))) {
-        return ack({ erro: 'Link do YouTube inválido' });
-      }
-      const a = assistindo.get(u.voz);
-      const cabe = MAX_FILA - (a?.fila.length ?? 0);
-      if (cabe <= 0) return ack({ erro: `A fila já tem ${MAX_FILA} vídeos` });
-      const itens = videos.slice(0, cabe).map((video) => ({ video, por: u.nome, titulo: titulosYoutube.get(video) }));
-      inicio = Math.min(Math.max(0, Number(inicio) || 0), itens.length - 1);
-      if (!a) {
-        assistindo.set(u.voz, tocarIndice({ fila: itens }, inicio));
-      } else if (agora) {
-        a.fila.splice(a.atual + 1, 0, ...itens);
-        tocarIndice(a, a.atual + 1 + inicio);
-      } else {
-        a.fila.push(...itens);
-      }
-      emitirAssistir(u.voz);
-      buscarTitulos(u.voz);
-      ack({ adicionados: itens.length, cortados: videos.length - itens.length });
-    }
-    quando('assistir:adicionar', adicionarVideos);
-    quando('assistir:iniciar', (u, video, ack) => adicionarVideos(u, { videos: [video], agora: true }, ack));
-    quando('assistir:pular', (u, i, ack) => {
-      const a = u.voz != null && assistindo.get(u.voz);
-      i = Number(i);
-      if (!a || !Number.isInteger(i) || !a.fila[i]) return ack({ erro: 'Vídeo não está na fila' });
-      tocarIndice(a, i);
-      emitirAssistir(u.voz);
+    // quem pôs ou admin do servidor tira a live da área (no YouTube ela continua)
+    quando('live:encerrar', (u, id, ack) => {
+      const l = sql.live.get(Number(id));
+      if (!l || !ehMembro(l.servidor, u.conta)) return ack({ erro: 'Essa live já acabou' });
+      if (l.conta !== u.conta && !ehAdminDe(l.servidor, u.conta)) return ack({ erro: 'Só quem pôs a live ou um admin encerra' });
+      sql.apagarLive.run(l.id);
+      registrar(u.conta, 'live', `encerrou a live "${l.titulo}" em ${nomeServidor(l.servidor)}`);
+      io.to(sala(l.servidor)).emit('live:mudou', { id: l.id, servidor: l.servidor, comecou: false });
       ack({});
     });
-    quando('assistir:remover', (u, i, ack) => {
-      const a = u.voz != null && assistindo.get(u.voz);
-      i = Number(i);
-      if (!a || !Number.isInteger(i) || !a.fila[i]) return ack({ erro: 'Vídeo não está na fila' });
-      a.fila.splice(i, 1);
-      if (!a.fila.length) assistindo.delete(u.voz);
-      else if (i === a.atual) tocarIndice(a, Math.min(i, a.fila.length - 1));
-      else if (i < a.atual) a.atual--;
-      emitirAssistir(u.voz);
-      ack({});
-    });
-    // o vídeo acabou (todo mundo avisa; só o primeiro aviso de cada vídeo conta)
-    quando('assistir:fim', (u, atual, ack) => {
-      const a = u.voz != null && assistindo.get(u.voz);
-      if (!a || a.atual !== Number(atual) || !a.tocando) return ack({});
-      if (a.atual + 1 < a.fila.length) tocarIndice(a, a.atual + 1);
-      else Object.assign(a, { tocando: false, posicao: a.posicao + (Date.now() - a.em) / 1000, em: Date.now() });
-      emitirAssistir(u.voz);
-      ack({});
-    });
-    quando('assistir:controle', (u, { tocando, posicao } = {}, ack) => {
-      const a = u.voz != null && assistindo.get(u.voz);
-      if (!a) return ack({ erro: 'Nada passando agora' });
-      posicao = Number(posicao);
-      if (!Number.isFinite(posicao) || posicao < 0 || posicao > 24 * 3600) return ack({ erro: 'Posição inválida' });
-      Object.assign(a, { tocando: !!tocando, posicao, em: Date.now() });
-      emitirAssistir(u.voz);
-      ack({});
-    });
-    quando('assistir:parar', (u, _, ack) => {
-      if (u.voz != null && assistindo.delete(u.voz)) emitirAssistir(u.voz);
-      ack({});
-    });
-    quando('assistir:estado', (u, _, ack) => ack(u.voz != null ? assistirPublico(u.voz) : null));
 
     // ---------- mapa da chamada: cada um anda com seu boneco e ouve mais alto quem está perto ----------
     // editor: quem constrói salva o mapa da sala em que está
@@ -2445,8 +2397,6 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
         }, 60_000).unref?.();
       }
       emitirPresenca();
-      // dá um tempo: pode ser só o servidor/conexão voltando (o vídeo continua pra quem reconectar)
-      setTimeout(limparAssistir, 90_000);
     });
   });
 

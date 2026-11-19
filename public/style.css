@@ -1346,19 +1346,6 @@ textarea {
 #status-mic { margin: 0; font-size: 13px; color: var(--texto-2); line-height: 1.4; }
 #status-mic.erro { color: #f38b8b; }
 
-/* ---------- assistir junto ---------- */
-#assistir { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
-#assistir[hidden] { display: none; }
-.video-assistir { flex: 1; min-height: 0; border-radius: 8px; overflow: hidden; background: #000; }
-.video-assistir iframe { width: 100%; height: 100%; border: 0; display: block; }
-.barra-assistir { display: flex; align-items: center; gap: 8px; }
-#info-assistir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--texto-2); font-size: 14px; }
-.barra-assistir .btn-secundario { padding: 6px 12px; font-size: 13px; }
-#grid.assistindo #palco { display: none; }
-#painel-assistir { position: fixed; width: min(400px, calc(100vw - 16px)); padding: 14px; display: grid; gap: 10px; }
-#painel-assistir h3 { margin: 0; font-size: 16px; color: var(--forte); }
-#painel-assistir p { margin: 0; font-size: 13px; color: var(--texto-2); line-height: 1.4; }
-
 /* ---------- qualidade da conexão ---------- */
 .ic.rede { width: 14px; height: 14px; flex: none; }
 .ic.rede-boa { color: var(--verde); }
@@ -1473,66 +1460,52 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .srv-acesso .cargo-chip input { margin: 0; }
 .srv-acesso .dica-cfg { margin: 0; }
 
-/* ---------- assistir junto: fila, playlist e vídeo diminuído ---------- */
 #grid { position: relative; }
-.corpo-assistir { flex: 1; min-height: 0; display: flex; gap: 8px; }
-.corpo-assistir .video-assistir { flex: 1; min-width: 0; }
-#fila-assistir { width: 300px; flex: none; display: flex; flex-direction: column; background: var(--sidebar); border-radius: 8px; overflow: hidden; }
-#fila-assistir[hidden] { display: none; }
-.titulo-fila { padding: 10px 12px; font-size: 13px; font-weight: 700; color: var(--forte); border-bottom: 1px solid #ffffff10; }
-#lista-fila { flex: 1; overflow-y: auto; margin: 0; padding: 4px; list-style: none; }
-.item-fila { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 6px; cursor: pointer; }
-.item-fila:hover { background: var(--hover); }
-.item-fila.atual { background: #5865f22e; cursor: default; }
-.n-item { width: 18px; flex: none; text-align: center; font-size: 12px; color: var(--texto-2); }
-.item-fila img { width: 80px; height: 45px; flex: none; object-fit: cover; border-radius: 4px; background: #000; }
-.item-fila .txt { flex: 1; min-width: 0; display: grid; gap: 2px; }
-.titulo-item { font-size: 13px; color: var(--texto); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.item-fila.atual .titulo-item { color: var(--forte); font-weight: 600; }
-.por-item { font-size: 11px; color: var(--texto-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.item-fila .btn-icone { width: 24px; height: 24px; flex: none; opacity: 0; }
-.item-fila:hover .btn-icone { opacity: 1; }
-.item-fila .btn-icone .ic { width: 14px; height: 14px; }
-.barra-assistir [hidden] { display: none; }
-.acoes-assistir { display: flex; gap: 8px; justify-content: flex-end; }
-#ampliar-assistir { display: none; }
-/* diminuído: o player fica por cima do bloco reservado na faixa */
-.tile-assistir { background: #000; }
-#grid.assistindo-mini #assistir { position: absolute; z-index: 2; gap: 0; border-radius: 8px; overflow: hidden; }
-#grid.assistindo-mini .barra-assistir, #grid.assistindo-mini #fila-assistir { display: none; }
-#grid.assistindo-mini .video-assistir { border-radius: 0; }
-#grid.assistindo-mini #ampliar-assistir {
-  display: flex; align-items: flex-end; position: absolute; inset: 0; padding: 8px; border: 0; background: transparent; cursor: pointer;
-}
-#ampliar-assistir span { padding: 2px 8px; border-radius: 4px; background: #000a; color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-#ampliar-assistir:hover span { background: var(--acento); }
-@media (max-width: 900px) { #fila-assistir { width: 200px; } .item-fila img { display: none; } }
 
-/* chat da live do lado do vídeo */
-#chat-assistir { width: 340px; flex: none; display: flex; flex-direction: column; background: var(--sidebar); border-radius: 8px; overflow: hidden; }
-#chat-assistir[hidden] { display: none; }
-#chat-assistir iframe { flex: 1; width: 100%; border: 0; background: var(--sidebar); }
-#grid.assistindo-mini #chat-assistir { display: none; }
-@media (max-width: 1100px) { #chat-assistir { width: 260px; } }
-
-/* telinha: fora da tela da call, o vídeo continua num cantinho (a call não some do DOM pro YouTube não recarregar) */
-#fechar-flutuante { display: none; }
-#view-voz.flutuante { position: absolute; width: 0; height: 0; overflow: visible; visibility: hidden; pointer-events: none; }
-#view-voz.flutuante #assistir {
-  position: fixed !important; left: auto !important; top: auto !important; right: 20px !important; bottom: 96px !important;
-  width: 384px !important; height: 216px !important; z-index: 15; gap: 0;
-  visibility: visible !important; pointer-events: auto; border-radius: 8px; overflow: hidden; box-shadow: 0 8px 24px #000a;
+/* ---------- área "Ao vivo" ---------- */
+#btn-live:hover .icone-dm, #btn-live.ativo .icone-dm { background: var(--vermelho); color: #fff; }
+/* tem live agora: bolinha vermelha no ícone */
+#btn-live.tem-live::after { content: ''; position: absolute; right: 12px; bottom: -2px; width: 12px; height: 12px; border-radius: 50%; background: var(--vermelho); border: 3px solid var(--rail); }
+#app.na-live #membros { display: none; }
+#view-live { flex: 1; display: flex; min-width: 0; min-height: 0; }
+#view-live[hidden] { display: none; }
+.live-vazio { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 24px; text-align: center; }
+.live-vazio[hidden], .live-conteudo[hidden] { display: none; }
+.live-vazio h2 { margin: 0; font-size: 20px; color: var(--forte); }
+.live-vazio p { margin: 0 0 6px; max-width: 420px; color: var(--texto-2); line-height: 1.5; }
+.live-vazio .btn-primario { padding: 10px 18px; }
+.live-conteudo { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.live-principal { flex: 1; min-width: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+#slot-live { flex: none; width: min(100%, calc((100vh - 250px) * 16 / 9)); aspect-ratio: 16 / 9; margin: 0 auto; background: #000; border-radius: 8px; }
+.live-cabeca { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.live-textos { flex: 1; min-width: 200px; }
+.live-textos h2 { margin: 0; font-size: 18px; color: var(--forte); display: flex; align-items: center; gap: 8px; }
+.live-textos p { margin: 2px 0 0; font-size: 13px; color: var(--texto-2); }
+.selo-live { flex: none; padding: 1px 6px; border-radius: 4px; background: var(--vermelho); color: #fff; font-size: 11px; font-weight: 700; }
+.live-cabeca .btn-secundario { padding: 6px 12px; font-size: 13px; }
+#btn-encerrar-live { color: #f38b8b; }
+.live-abas { display: flex; flex-wrap: wrap; gap: 8px; }
+.live-abas .btn-secundario { padding: 6px 12px; font-size: 13px; background: var(--sidebar); }
+.live-abas .btn-secundario.ativa { background: var(--ativo); }
+#chat-live { width: 360px; flex: none; display: flex; background: var(--sidebar); border-left: 1px solid var(--borda); }
+#chat-live iframe { flex: 1; width: 100%; border: 0; }
+@media (max-width: 1100px) { #chat-live { width: 300px; } }
+@media (max-width: 900px) {
+  .live-conteudo { flex-direction: column; }
+  #chat-live { width: auto; height: 50vh; border-left: 0; border-top: 1px solid var(--borda); }
 }
-#view-voz.flutuante .barra-assistir, #view-voz.flutuante #fila-assistir, #view-voz.flutuante #chat-assistir { display: none; }
-#view-voz.flutuante .video-assistir { border-radius: 0; }
-#view-voz.flutuante #ampliar-assistir {
-  display: flex; align-items: flex-end; position: absolute; inset: 0; padding: 8px; border: 0; background: transparent; cursor: pointer;
-}
-#view-voz.flutuante #fechar-flutuante {
-  display: grid; position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 50%; background: #000b; color: #fff; z-index: 1;
-}
-#view-voz.flutuante #fechar-flutuante:hover { background: var(--vermelho); }
-@media (max-width: 760px) { #view-voz.flutuante #assistir { width: 240px !important; height: 135px !important; right: 12px !important; } }
+#player-live-box { position: fixed; z-index: 15; background: #000; border-radius: 8px; overflow: hidden; }
+#player-live-box[hidden] { display: none; }
+#player-live-box iframe, #player-live { width: 100%; height: 100%; border: 0; display: block; }
+#live-voltar, #live-fechar { display: none; }
+/* telinha: fora da área, a live continua num cantinho */
+#player-live-box.mini { right: 20px; bottom: 96px; width: 384px; height: 216px; box-shadow: 0 8px 24px #000a; }
+#player-live-box.mini #live-voltar { display: flex; align-items: flex-end; position: absolute; inset: 0; padding: 8px; border: 0; background: transparent; cursor: pointer; }
+#live-voltar span { padding: 2px 8px; border-radius: 4px; background: #000a; color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+#live-voltar:hover span { background: var(--vermelho); }
+#player-live-box.mini #live-fechar { display: grid; position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 50%; background: #000b; color: #fff; z-index: 1; }
+#player-live-box.mini #live-fechar:hover { background: var(--vermelho); }
+@media (max-width: 760px) { #player-live-box.mini { width: 240px; height: 135px; right: 12px; } }
 
 /* ---------- formatação de texto ---------- */
 .linha code.codigo { background: var(--rodape); border-radius: 4px; padding: 1px 5px; font-family: Consolas, 'Courier New', monospace; font-size: 0.875em; }
@@ -1555,7 +1528,7 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .previa-descricao { font-size: 14px; color: var(--texto); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .previa-img { width: 80px; height: 80px; object-fit: cover; border-radius: 4px; cursor: pointer; }
 .previa-img.grande { width: 100%; height: auto; max-height: 240px; object-fit: cover; }
-.previa-assistir { justify-self: start; }
+.previa-live { justify-self: start; }
 
 /* ---------- sortear times ---------- */
 #painel-times { position: fixed; width: min(300px, calc(100vw - 16px)); padding: 12px; display: grid; gap: 8px; }

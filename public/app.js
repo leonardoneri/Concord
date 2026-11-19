@@ -130,7 +130,7 @@ const volumes = lerStorage('volumes', {});
 const ajustes = lerStorage('ajustes', {});
 const dispositivos = lerStorage('dispositivos', { mic: '', cam: '', saida: '' });
 const transmissao = lerStorage('transmissao', { resolucao: '1080', fps: 30 });
-// mutei o vídeo do assistir junto / as transmissões de tela: continua mudo nos próximos até eu desmutar
+// mutei a live do Ao vivo / as transmissões de tela: continua mudo nas próximas até eu desmutar
 const mudoFixo = lerStorage('mudoFixo', { videos: false, telas: false });
 let meuBoneco = lerStorage('boneco', null); // como é o meu boneco no mapa da chamada
 
@@ -541,6 +541,7 @@ function entrar() {
     $('#btn-admin').hidden = !res.admin;
     estado.servidores = res.servidores;
     estado.iceServers = res.iceServers;
+    carregarLives();
     estado.versao ??= res.versao ?? null; // versão desta página (a das novidades)
     estado.versaoServidor = res.versao ?? null;
     // o servidor foi atualizado com a página aberta: oferece recarregar (as novidades aparecem depois disso)
@@ -655,7 +656,7 @@ function abrirDmCom(conta) {
   });
 }
 
-$('#btn-dms').onclick = () => { if (!emDm()) abrirDms(); };
+$('#btn-dms').onclick = () => (emDm() ? sairDaLive() : abrirDms());
 
 function entrarComConvite(convite) {
   socket.emit('servidor:entrar', { convite }, (res) => {
@@ -911,12 +912,6 @@ function restaurarVoz(voz) {
   }
   for (const id of voz.outros) if (!peers.has(id)) criarPeer(id);
   if ($('#toast').textContent.startsWith('Reconectando')) $('#toast').hidden = true;
-  // o servidor reiniciou e esqueceu o vídeo: quem estava assistindo devolve ele, no ponto em que estava
-  const tinha = estado.assistir && { ...estado.assistir, posicao: posicaoEsperada() };
-  socket.emit('assistir:estado', null, (a) => {
-    if (a || !tinha) return aplicarAssistir(a);
-    socket.emit('assistir:iniciar', tinha.video, () => socket.emit('assistir:controle', { tocando: tinha.tocando, posicao: tinha.posicao }));
-  });
   restaurarMapa();
 }
 
@@ -974,6 +969,7 @@ function render() {
   renderMembros();
   renderPainel();
   renderView();
+  renderLive();
   renderGrid();
 }
 
@@ -1000,20 +996,25 @@ const contador = (n) => el('span', 'badge-mencao', n > 99 ? '99+' : String(n));
 function renderRail() {
   const dms = $('#btn-dms');
   const dmsNovas = [...estado.dmNaoLidos.values()].reduce((a, b) => a + b, 0);
-  dms.classList.toggle('ativo', emDm());
+  dms.classList.toggle('ativo', emDm() && !estado.areaLive);
   dms.classList.toggle('nao-lido', dmsNovas > 0);
   dms.querySelector('.badge-mencao')?.remove();
   if (dmsNovas) dms.append(contador(dmsNovas));
   $('#lista-servidores').replaceChildren(...estado.servidores.map((srv) => {
     const item = el('div', 'rail-item');
-    item.classList.toggle('ativo', srv.id === estado.servidor.id);
+    item.classList.toggle('ativo', srv.id === estado.servidor.id && !estado.areaLive);
     item.classList.toggle('nao-lido', estado.srvNaoLidos.has(srv.id));
     item.title = srv.nome;
     const ic = el('div', 'icone-servidor');
     pintarIconeServidor(ic, srv);
     item.append(el('span', 'pill'), ic);
     if (estado.srvMencoes.get(srv.id)) item.append(contador(estado.srvMencoes.get(srv.id)));
-    item.onclick = () => { if (srv.id !== estado.servidor.id) abrirServidor(srv.id, undefined, true); };
+    item.onclick = () => {
+      if (srv.id !== estado.servidor.id) return abrirServidor(srv.id, undefined, true);
+      // já é o aberto: só sai do Ao vivo (a live continua na telinha)
+      sairDaLive();
+      renderRail();
+    };
     item.oncontextmenu = (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1251,6 +1252,7 @@ function renderCanais() {
           e.stopPropagation();
           esconderPrevia();
           estado.view = 'voz';
+          sairDaLive();
           return render();
         }
         abrirPerfil(u.nome, e);
@@ -1357,21 +1359,17 @@ function renderPainel() {
   $$('.btn-tela').forEach((b) => b.classList.toggle('ligado', !!estado.tela));
 }
 
-let flutuanteFechada = false; // escondi a telinha: volta quando eu abrir a call de novo
 function renderView() {
-  const naVoz = estado.view === 'voz' && !!estado.voz;
-  if (naVoz) flutuanteFechada = false;
-  // fora da tela da call com vídeo passando: o vídeo fica numa telinha no canto
-  const flutuante = !naVoz && !!estado.voz && !!estado.assistir && !flutuanteFechada;
-  $('#view-texto').hidden = naVoz;
-  $('#view-voz').hidden = !naVoz && !flutuante;
-  $('#view-voz').classList.toggle('flutuante', flutuante);
-  $('#ampliar-assistir span').textContent = flutuante ? `Voltar pra call ${estado.vozInfo?.canal ?? ''}` : 'Assistindo junto · clique pra ampliar';
-  $('#icone-canal').replaceChildren(icone(naVoz ? 'voz' : emDm() ? 'arroba' : 'hash'));
+  const live = estado.areaLive;
+  const naVoz = !live && estado.view === 'voz' && !!estado.voz;
+  $('#view-texto').hidden = naVoz || live;
+  $('#view-voz').hidden = !naVoz;
+  $('#view-live').hidden = !live;
+  $('#icone-canal').replaceChildren(icone(live ? 'tv' : naVoz ? 'voz' : emDm() ? 'arroba' : 'hash'));
   const texto = canalPorId(estado.canalTexto);
-  $('#titulo-canal').textContent = naVoz ? estado.vozInfo?.canal ?? '' : texto?.nome ?? '';
-  $('#topico').textContent = naVoz ? '' : texto?.topico ?? '';
-  $('#btn-fixadas').hidden = naVoz;
+  $('#titulo-canal').textContent = live ? 'Ao vivo' : naVoz ? estado.vozInfo?.canal ?? '' : texto?.nome ?? '';
+  $('#topico').textContent = live || naVoz ? '' : texto?.topico ?? '';
+  $('#btn-fixadas').hidden = naVoz || live;
   $('#input-msg').placeholder = emDm() ? `Conversar com @${texto?.nome ?? ''}` : `Conversar em #${texto?.nome ?? ''}`;
   $('#form-msg').hidden = estado.canalTexto == null;
 }
@@ -1404,6 +1402,7 @@ let alvoMensagem = null; // { canal, id }: pular pra essa mensagem quando o cana
 const digitando = new Map(); // nome -> timeout
 
 function abrirTexto(canal) {
+  sairDaLive();
   estado.canalTexto = canal ?? null;
   if (canal != null && estado.servidor.id != null) {
     const ultimos = lerStorage('ultimoCanal', {});
@@ -1733,13 +1732,10 @@ function cartaoPrevia(url) {
       caixa.classList.toggle('com-grande', !!p.grande);
       caixa.append(img);
     }
-    if (p.youtube && estado.voz) {
-      const b = el('button', 'btn-secundario previa-assistir', estado.assistir ? 'Pôr na fila da chamada' : 'Assistir junto na chamada');
+    if (p.youtube) {
+      const b = el('button', 'btn-secundario previa-live', 'Pôr no Ao vivo');
       b.type = 'button';
-      b.onclick = () => socket.emit('assistir:adicionar', { videos: [p.youtube], agora: !estado.assistir }, (r) => {
-        if (r?.erro) return avisar(r.erro);
-        avisar(estado.assistir ? 'Vídeo na fila da chamada.' : 'Vídeo rolando na chamada.', 3000);
-      });
+      b.onclick = () => abrirNovaLive(url);
       caixa.append(b);
     }
     return true;
@@ -2435,6 +2431,7 @@ async function entrarVoz(canal) {
   fecharMenu();
   if (estado.voz === canal) {
     estado.view = 'voz';
+    sairDaLive();
     render();
     return;
   }
@@ -2459,13 +2456,13 @@ async function entrarVoz(canal) {
   estado.voz = canal;
   estado.vozInfo = { canal: canalPorId(canal)?.nome ?? '', servidor: estado.servidor.nome, servidorId: estado.servidor.id };
   estado.view = 'voz';
+  sairDaLive();
   socket.emit('voz:entrar', canal, (ids) => {
     if (!Array.isArray(ids)) {
       sairVoz(false);
       return avisar('Não deu pra entrar nessa sala.');
     }
     for (const id of ids) if (!peers.has(id)) criarPeer(id);
-    socket.emit('assistir:estado', null, aplicarAssistir); // já tem vídeo passando nessa sala?
     socket.emit('mapa:boneco', meuBonecoAgora());
     socket.emit('mapa:estado', null, aplicarMapa); // e o mapa, está ligado?
   });
@@ -2491,8 +2488,6 @@ function sairVoz(avisarServidor = true) {
   sumidos.clear();
   estado.voz = null;
   estado.vozInfo = null;
-  estado.assistir = null;
-  fecharPlayer();
   aplicarMapa(null);
   Object.assign(minhaRede, { ping: null, perda: null, ruinsSeguidas: 0, enviado: null });
   minhaRede.porPeer.clear();
@@ -2820,18 +2815,16 @@ let foco = null;
 let telasAntes = new Set();
 let tiraVisivel = true;
 
-// o "assistir junto" conta como uma transmissão (chave 'assistir') e tem preferência no automático
 let destaqueAtual = null;
-function escolherDestaque(desejados, assistindo) {
+function escolherDestaque(desejados) {
   const telas = desejados.filter((d) => d.tipo === 'tela');
-  const chaves = [...(assistindo ? ['assistir'] : []), ...telas.map((d) => d.chave)];
-  // alguém começou a transmitir (ou colocou vídeo): volta pro automático pra mostrar
+  const chaves = telas.map((d) => d.chave);
+  // alguém começou a transmitir: volta pro automático pra mostrar
   if (chaves.some((c) => !telasAntes.has(c))) foco = null;
   telasAntes = new Set(chaves);
   if (foco === false) return null;
-  if (foco && (foco === 'assistir' ? assistindo : desejados.some((d) => d.chave === foco))) return foco;
+  if (foco && desejados.some((d) => d.chave === foco)) return foco;
   foco = null;
-  if (assistindo) return 'assistir';
   return (telas.find((d) => !d.local) ?? telas[0])?.chave ?? null;
 }
 
@@ -2840,11 +2833,10 @@ function focarTile(chave) {
   renderGrid();
 }
 
-// vídeo diminuído: o player (que não pode mudar de lugar no DOM, senão o YouTube recarrega)
-// fica por cima de um bloco reservado na faixa, do mesmo tamanho dos outros
+// mapa diminuído: o canvas fica por cima de um bloco reservado na faixa, do mesmo tamanho dos outros
 function posicionarMini() {
   const g = $('#grid').getBoundingClientRect();
-  for (const [box, classe, bloco] of [[$('#assistir'), 'assistindo-mini', '.tile-assistir'], [$('#mapa'), 'mapa-mini', '.tile-mapa']]) {
+  for (const [box, classe, bloco] of [[$('#mapa'), 'mapa-mini', '.tile-mapa']]) {
     const lugar = $('#grid').classList.contains(classe) && $(`#tira ${bloco}`);
     if (!lugar) {
       box.style.cssText = '';
@@ -2860,21 +2852,6 @@ function posicionarMini() {
 }
 new ResizeObserver(posicionarMini).observe($('#grid'));
 $('#tira').addEventListener('scroll', posicionarMini);
-$('#ampliar-assistir').onclick = () => {
-  if (!$('#view-voz').classList.contains('flutuante')) return focarTile('assistir');
-  // telinha: volta pra call (abrindo o servidor dela se eu estiver em outro)
-  const srv = estado.vozInfo?.servidorId;
-  if (srv != null && srv !== estado.servidor.id) abrirServidor(srv);
-  estado.view = 'voz';
-  render();
-};
-$('#fechar-flutuante').onclick = (e) => {
-  e.stopPropagation();
-  flutuanteFechada = true;
-  renderView();
-};
-$('#btn-diminuir-assistir').onclick = () => focarTile('assistir');
-
 function renderGrid() {
   const grid = $('#grid');
   const palco = $('#palco');
@@ -2899,53 +2876,37 @@ function renderGrid() {
   // O próprio mapa é o destaque 'mapa'; clicando em diminuir ele vira um bloco igual aos outros.
   const noMapa = !!(estado.voz && estado.mapa);
   if (noMapa) desejados.splice(0, desejados.length, ...desejados.filter((d) => d.local || pertoNoMapa(d.u.id)));
-  const assistindo = !!(estado.voz && estado.assistir);
   let destaque;
   if (noMapa) {
-    const existe = foco === 'assistir' ? assistindo : desejados.some((d) => d.chave === foco);
+    const existe = desejados.some((d) => d.chave === foco);
     destaque = editor || foco === null || foco === 'mapa' ? 'mapa' : foco === false ? null : existe ? foco : 'mapa';
   } else {
-    destaque = escolherDestaque(desejados, assistindo);
+    destaque = escolherDestaque(desejados);
   }
   destaqueAtual = destaque;
   const mapaGrande = destaque === 'mapa';
   if (mapaGrande) destaque = null;
-  const videoGrande = destaque === 'assistir';
   grid.classList.toggle('mapa', mapaGrande);
   grid.classList.toggle('mapa-mini', noMapa && !mapaGrande);
   $('#btn-mapa').hidden = !noMapa || mapaGrande;
   grid.classList.toggle('foco', !!destaque);
-  grid.classList.toggle('assistindo', videoGrande);
-  grid.classList.toggle('assistindo-mini', assistindo && !videoGrande);
   grid.classList.toggle('sem-tira', !!destaque && !tiraVisivel);
   $('#btn-tira').hidden = !destaque;
   $('#btn-tira').title = tiraVisivel ? 'Esconder participantes' : 'Mostrar participantes';
   $('#btn-tira').classList.toggle('desligado', !tiraVisivel);
 
-  // bloco reservado pro vídeo diminuído (primeiro da faixa)
-  let reserva = tira.querySelector('.tile-assistir');
-  if (assistindo && !videoGrande) {
-    if (!reserva) {
-      reserva = el('div', 'tile tile-assistir');
-      reserva.dataset.chave = 'assistir';
-    }
-    if (tira.firstElementChild !== reserva) tira.prepend(reserva);
-  } else {
-    reserva?.remove();
-  }
-  // e o do mapa diminuído (logo depois)
+  // bloco reservado pro mapa diminuído (primeiro da faixa)
   let reservaMapa = tira.querySelector('.tile-mapa');
   if (noMapa && !mapaGrande) {
     if (!reservaMapa) {
       reservaMapa = el('div', 'tile tile-mapa');
       reservaMapa.dataset.chave = 'mapa';
     }
-    const antes = reserva?.isConnected ? reserva.nextElementSibling : tira.firstElementChild;
-    if (antes !== reservaMapa) tira.insertBefore(reservaMapa, antes);
+    if (tira.firstElementChild !== reservaMapa) tira.prepend(reservaMapa);
   } else {
     reservaMapa?.remove();
   }
-  const existentes = new Map([...grid.querySelectorAll('.tile:not(.tile-assistir):not(.tile-mapa)')].map((t) => [t.dataset.chave, t]));
+  const existentes = new Map([...grid.querySelectorAll('.tile:not(.tile-mapa)')].map((t) => [t.dataset.chave, t]));
   for (const d of desejados) {
     let tile = existentes.get(d.chave);
     if (tile) existentes.delete(d.chave);
@@ -3980,73 +3941,19 @@ $('#form-som').onsubmit = async (e) => {
   });
 };
 
-// ---------- assistir junto (YouTube sincronizado) ----------
-// O servidor guarda { video, por, tocando, posicao }; cada um toca o vídeo no próprio PC
-// e corrige quando fica fora do tempo dos outros.
+// ---------- área "Ao vivo": lives do YouTube (ícone no menu da esquerda) ----------
+// O player fica num lugar só da tela (#player-live-box), senão o YouTube recarrega: na área ele cobre o espaço
+// do vídeo; fora dela vira a telinha no canto. Cada um assiste no seu ritmo, com o chat do YouTube do lado.
 let player = null;
 let playerVideo = null;
 let ytPronto = null;
-let recebidoEm = 0; // quando chegou o estado (pra calcular onde o vídeo deveria estar agora)
-let aplicandoAte = 0; // mudanças feitas pelo próprio app (não são cliques da pessoa)
 let mudoAssistir = null; // como o player está agora (null = ainda não sei)
 const videoSemSom = () => estado.surdo || mudoFixo.videos;
-
-// { video, lista }: vídeo e/ou playlist de um link do YouTube
-function linkDoYoutube(texto) {
-  const video = idDoYoutube(texto);
-  let lista = null;
-  try {
-    lista = new URL(String(texto).trim()).searchParams.get('list');
-  } catch {}
-  return { video, lista: /^[A-Za-z0-9_-]{10,64}$/.test(lista ?? '') ? lista : null };
-}
-
-// ids dos vídeos de uma playlist: abre um player escondido com ela e pergunta a lista (até 200)
-async function videosDaPlaylist(lista) {
-  await carregarYoutube();
-  return new Promise((ok, falha) => {
-    const div = document.createElement('div');
-    div.style.cssText = 'position:fixed;left:-9999px;top:0;width:320px;height:180px';
-    document.body.append(div);
-    let tentativas = 0;
-    let timer = null;
-    const fim = (v, erro) => {
-      clearInterval(timer);
-      try { p.destroy(); } catch {}
-      div.remove();
-      erro ? falha(erro) : ok(v);
-    };
-    const p = new YT.Player(div, {
-      playerVars: { listType: 'playlist', list: lista, autoplay: 0, mute: 1, origin: location.origin },
-      events: {
-        onReady: () => {
-          timer = setInterval(() => {
-            const ids = p.getPlaylist?.();
-            if (ids?.length) fim(ids.filter((id) => /^[A-Za-z0-9_-]{11}$/.test(id)));
-            else if (++tentativas > 30) fim(null, new Error('playlist vazia'));
-          }, 300);
-        },
-        onError: () => fim(null, new Error('playlist inválida')),
-      },
-    });
-  });
-}
-
-function idDoYoutube(texto) {
-  texto = String(texto ?? '').trim();
-  if (/^[A-Za-z0-9_-]{11}$/.test(texto)) return texto;
-  try {
-    const u = new URL(texto);
-    const host = u.hostname.replace(/^(www|m|music)\./, '');
-    if (host === 'youtu.be') return u.pathname.slice(1, 12);
-    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
-      if (u.searchParams.get('v')) return u.searchParams.get('v').slice(0, 11);
-      const m = u.pathname.match(/^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{11})/);
-      if (m) return m[1];
-    }
-  } catch {}
-  return null;
-}
+estado.lives = []; // lives dos meus servidores: { id, servidor, servidorNome, video, titulo, conta, por, criado_em }
+estado.areaLive = false; // a área está aberta na tela
+let liveVendo = null; // id da live tocando no player (null = nenhuma: fechei a telinha)
+let liveEscolhida = null; // aba escolhida na área, quando tem mais de uma
+let chatDoVideo = null;
 
 function carregarYoutube() {
   ytPronto ??= new Promise((resolve, reject) => {
@@ -4063,225 +3970,154 @@ function carregarYoutube() {
   return ytPronto;
 }
 
-// onde o vídeo deveria estar agora, pelo estado do servidor
-function posicaoEsperada() {
-  const a = estado.assistir;
-  if (!a) return 0;
-  return a.tocando ? a.posicao + (Date.now() - recebidoEm) / 1000 : a.posicao;
+function carregarLives() {
+  socket.emit('live:lista', null, (lista) => {
+    if (!Array.isArray(lista)) return;
+    estado.lives = lista;
+    // a que eu assistia acabou: some a telinha
+    if (liveVendo != null && !lista.some((l) => l.id === liveVendo)) liveVendo = null;
+    renderLive();
+  });
 }
+socket.on('live:mudou', ({ comecou, conta, por, titulo }) => {
+  carregarLives();
+  if (comecou && conta !== estado.eu?.conta) {
+    som('entrar');
+    avisar(`🔴 ${por} pôs uma live: ${titulo}. Abra o "Ao vivo" no menu da esquerda.`, 10000);
+  }
+});
 
-// live do YouTube: todo mundo assiste "ao vivo", então não acerta a posição de ninguém
-const ehLive = () => !!player?.getVideoData?.()?.isLive;
+const liveAtual = () => estado.lives.find((l) => l.id === liveEscolhida)
+  ?? estado.lives.find((l) => l.id === liveVendo) ?? estado.lives[0] ?? null;
 
-function sincronizarPlayer() {
-  const a = estado.assistir;
-  if (!player?.getPlayerState || !a || playerVideo !== a.video) return;
-  renderChatLive();
-  const st = player.getPlayerState();
-  // acabou: espera o servidor mandar o próximo (a não ser que seja o mesmo vídeo de novo na fila)
-  if (st === YT.PlayerState.ENDED && !(a.tocando && posicaoEsperada() < 3)) return;
-  const atual = player.getCurrentTime?.() ?? 0;
-  const esperada = posicaoEsperada();
-  if (!ehLive() && Math.abs(atual - esperada) > 2) {
-    aplicandoAte = Date.now() + 1500;
-    player.seekTo(esperada, true);
+function abrirLive() {
+  fecharPopovers();
+  estado.areaLive = true;
+  render();
+}
+// sair da área (abriu um canal, a call, outro servidor…): a live continua na telinha
+function sairDaLive() {
+  if (!estado.areaLive) return;
+  estado.areaLive = false;
+  renderView();
+  renderLive();
+}
+$('#btn-live').onclick = abrirLive;
+
+function renderLive() {
+  const area = estado.areaLive;
+  $('#btn-live').classList.toggle('ativo', area);
+  $('#btn-live').classList.toggle('tem-live', estado.lives.length > 0);
+  $('#btn-live').title = estado.lives.length ? `Ao vivo agora: ${estado.lives.map((l) => l.titulo).join(', ')}` : 'Ao vivo: lives do YouTube com o chat do lado';
+  $('#app').classList.toggle('na-live', area);
+  renderRail();
+  const l = liveAtual();
+  if (area && l) liveVendo = l.id; // abrir a área já põe pra tocar
+  if (area) {
+    $('#live-vazio').hidden = !!l;
+    $('#live-conteudo').hidden = !l;
+    if (l) {
+      $('#live-titulo').textContent = l.titulo;
+      $('#live-info').textContent = `${l.servidorNome} · pôs ${l.por} ${fmtQuando(l.criado_em)}`;
+      const meuServidor = estado.servidores.find((x) => x.id === l.servidor);
+      $('#btn-encerrar-live').hidden = !(l.conta === estado.eu?.conta || meuServidor?.dono === estado.eu?.conta
+        || (l.servidor === estado.servidor.id && souAdmin()));
+      $('#live-abas').replaceChildren(...(estado.lives.length > 1 ? estado.lives.map((x) => {
+        const b = el('button', `btn-secundario${x.id === l.id ? ' ativa' : ''}`, x.titulo);
+        b.type = 'button';
+        b.title = `${x.servidorNome} · pôs ${x.por}`;
+        b.onclick = () => {
+          liveEscolhida = x.id;
+          renderLive();
+        };
+        return b;
+      }) : []));
+    }
   }
-  if (a.tocando && st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.BUFFERING) {
-    aplicandoAte = Date.now() + 1500;
-    player.playVideo();
-  } else if (!a.tocando && st === YT.PlayerState.PLAYING) {
-    aplicandoAte = Date.now() + 1500;
-    player.pauseVideo();
+  // chat do YouTube do lado (ele só abre se souber em qual site está)
+  const chat = area && l ? l.video : null;
+  if (chat !== chatDoVideo) {
+    chatDoVideo = chat;
+    $('#iframe-chat').src = chat
+      ? `https://www.youtube.com/live_chat?v=${chat}&embed_domain=${encodeURIComponent(location.hostname)}&dark_theme=1`
+      : 'about:blank';
   }
-  // no surdo (ou com o mudo fixo), o vídeo também fica mudo
-  if (mudoAssistir !== videoSemSom()) {
-    mudoAssistir = videoSemSom();
-    if (mudoAssistir) player.mute();
-    else player.unMute();
-  }
+  const vendo = estado.lives.find((x) => x.id === liveVendo);
+  $('#live-voltar-texto').textContent = vendo ? `🔴 ${vendo.titulo} · clique pra abrir` : '';
+  if (vendo) tocarLive(vendo.video);
+  else fecharPlayer();
+  posicionarPlayer();
   renderSomAssistir();
 }
 
-// a pessoa deu play/pause/pulou no player: avisa a sala (se for diferente do que todo mundo já está vendo)
-function mudouPlayer(e) {
-  if (!estado.assistir) return;
-  const S = YT.PlayerState;
-  if (e.data === S.ENDED) {
-    // acabou: o servidor passa pro próximo da fila (todo mundo avisa, ele só conta uma vez).
-    // Só vale se é o vídeo atual e chegou mesmo no fim: trocando de vídeo, o player às vezes
-    // avisa "acabou" do anterior
-    const a = estado.assistir;
-    const dur = player?.getDuration?.() ?? 0;
-    const doAtual = playerVideo === a.video && player?.getVideoData?.().video_id === a.video;
-    if (a.tocando && doAtual && dur > 0 && player.getCurrentTime() >= dur - 2) socket.emit('assistir:fim', a.atual);
-    return;
-  }
-  if (Date.now() < aplicandoAte) return;
-  if (![S.PLAYING, S.PAUSED].includes(e.data)) return;
-  const tocando = e.data === S.PLAYING;
-  const posicao = player.getCurrentTime();
-  if (tocando === estado.assistir.tocando && (ehLive() || Math.abs(posicao - posicaoEsperada()) < 1.5)) return;
-  estado.assistir = { ...estado.assistir, tocando, posicao };
-  recebidoEm = Date.now();
-  socket.emit('assistir:controle', { tocando, posicao });
-}
-
-// chat da live ao lado do vídeo (só aparece em live; o botão "Chat" esconde/mostra)
-let chatVisivel = lerStorage('chatLive', true);
-let chatDoVideo = null;
-function renderChatLive() {
-  const live = !!estado.assistir && playerVideo === estado.assistir.video && ehLive();
-  $('#btn-chat-assistir').hidden = !live;
-  $('#btn-chat-assistir').textContent = chatVisivel ? 'Esconder chat' : 'Chat';
-  $('#chat-assistir').hidden = !live || !chatVisivel;
-  const video = live && chatVisivel ? playerVideo : null;
-  if (video === chatDoVideo) return;
-  chatDoVideo = video;
-  // o YouTube só deixa mostrar o chat se disser em qual site ele está
-  $('#iframe-chat').src = video
-    ? `https://www.youtube.com/live_chat?v=${video}&embed_domain=${encodeURIComponent(location.hostname)}&dark_theme=1`
-    : 'about:blank';
-}
-$('#btn-chat-assistir').onclick = () => {
-  chatVisivel = !chatVisivel;
-  salvarStorage('chatLive', chatVisivel);
-  renderChatLive();
-};
-
-function renderInfoAssistir() {
-  const a = estado.assistir;
-  if (!a) return;
-  renderChatLive();
-  const titulo = a.titulo ?? (playerVideo === a.video ? player?.getVideoData?.().title : null);
-  const n = a.fila?.length ?? 1;
-  $('#info-assistir').textContent = `${a.por} colocou${titulo ? `: ${titulo}` : ' um vídeo'}${n > 1 ? ` · ${a.atual + 1} de ${n}` : ''}`;
-  $('#btn-proximo-video').hidden = !(a.atual + 1 < n);
-  $('#btn-fila-assistir').hidden = n < 2;
-  $('#btn-fila-assistir').textContent = filaVisivel ? `Esconder fila (${n})` : `Fila (${n})`;
-}
-
-// fila do "assistir junto": clique pra pular pra um vídeo, X tira da fila
-let filaVisivel = lerStorage('filaAssistir', true);
-let filaRenderizada = '';
-function renderFila() {
-  const a = estado.assistir;
-  const fila = a?.fila ?? [];
-  $('#fila-assistir').hidden = !filaVisivel || fila.length < 2;
-  const chave = JSON.stringify([a?.atual, fila]);
-  if (chave === filaRenderizada) return;
-  filaRenderizada = chave;
-  $('#titulo-fila').textContent = `Fila · ${fila.length} vídeos`;
-  $('#lista-fila').replaceChildren(...fila.map((v, i) => {
-    const li = el('li', `item-fila${i === a.atual ? ' atual' : ''}`);
-    li.title = i === a.atual ? 'Tocando agora' : 'Tocar este';
-    const img = el('img');
-    img.src = `https://i.ytimg.com/vi/${v.video}/mqdefault.jpg`;
-    img.loading = 'lazy';
-    img.alt = '';
-    const txt = el('div', 'txt');
-    txt.append(el('span', 'titulo-item', v.titulo ?? 'Vídeo do YouTube'), el('span', 'por-item', `${i === a.atual ? '▶ Tocando · ' : ''}${v.por}`));
-    const x = el('button', 'btn-icone');
-    x.type = 'button';
-    x.title = 'Tirar da fila';
-    x.append(icone('fechar'));
-    x.onclick = (e) => {
-      e.stopPropagation();
-      socket.emit('assistir:remover', i, (r) => r?.erro && avisar(r.erro));
-    };
-    li.append(el('span', 'n-item', String(i + 1)), img, txt, x);
-    li.onclick = () => i !== a.atual && socket.emit('assistir:pular', i, (r) => r?.erro && avisar(r.erro));
-    return li;
-  }));
-  $('#lista-fila .atual')?.scrollIntoView({ block: 'nearest' });
-}
-$('#btn-fila-assistir').onclick = () => {
-  filaVisivel = !filaVisivel;
-  salvarStorage('filaAssistir', filaVisivel);
-  renderFila();
-  renderInfoAssistir();
-};
-$('#btn-proximo-video').onclick = () => {
-  const a = estado.assistir;
-  if (a && a.atual + 1 < a.fila.length) socket.emit('assistir:pular', a.atual + 1, (r) => r?.erro && avisar(r.erro));
-};
-
-function fecharPlayer() {
-  player?.destroy?.();
-  player = null;
-  playerVideo = null;
-  mudoAssistir = null;
-  renderChatLive();
-  $('#assistir').hidden = true;
-  // o destroy troca a div do player por nada: recria pro próximo vídeo
-  if (!$('#player-assistir')) $('.video-assistir').append(Object.assign(document.createElement('div'), { id: 'player-assistir' }));
-}
-
-async function aplicarAssistir(a) {
-  estado.assistir = estado.voz ? a : null;
-  recebidoEm = Date.now();
-  if (!estado.assistir) {
-    fecharPlayer();
-    renderGrid();
-    renderView(); // some a telinha
-    return;
-  }
-  $('#assistir').hidden = false;
-  renderView(); // começou vídeo com a call fora da tela: aparece a telinha
-  renderInfoAssistir();
-  renderFila();
-  renderGrid();
-  if (playerVideo === a.video && player) return sincronizarPlayer();
+async function tocarLive(video) {
+  if (playerVideo === video) return;
+  playerVideo = video;
   try {
     await carregarYoutube();
   } catch {
     return avisar('Não consegui carregar o YouTube aqui (sem internet ou bloqueado).');
   }
-  if (estado.assistir?.video !== a.video) return;
-  playerVideo = a.video;
-  if (player) {
-    aplicandoAte = Date.now() + 2000;
-    player.loadVideoById({ videoId: a.video, startSeconds: posicaoEsperada() });
-    return;
-  }
-  player = new YT.Player('player-assistir', {
-    videoId: a.video,
+  if (playerVideo !== video) return;
+  if (player) return player.loadVideoById(video);
+  player = new YT.Player('player-live', {
+    videoId: video,
     // já nasce mudo se for pra ficar mudo (senão dá um pedaço de som antes)
-    playerVars: { autoplay: 1, mute: videoSemSom() ? 1 : 0, start: Math.floor(posicaoEsperada()), rel: 0, playsinline: 1, origin: location.origin },
-    events: {
-      onReady: () => {
-        aplicandoAte = Date.now() + 2000;
-        sincronizarPlayer();
-        renderInfoAssistir();
-      },
-      onStateChange: (e) => {
-        mudouPlayer(e);
-        renderInfoAssistir();
-      },
-      onError: (e) => {
-        const a = estado.assistir;
-        const temProximo = a && a.atual + 1 < (a.fila?.length ?? 1);
-        const msg = [101, 150, 153].includes(e.data)
-          ? 'Esse vídeo não deixa ser assistido fora do YouTube.'
-          : 'O YouTube não conseguiu tocar esse vídeo.';
-        avisar(temProximo ? `${msg} Pulando pro próximo da fila…` : `${msg} Tenta outro.`);
-        // não trava a fila num vídeo bloqueado (todo mundo avisa; o servidor só pula uma vez)
-        if (temProximo) {
-          const atual = a.atual;
-          setTimeout(() => estado.assistir?.atual === atual && socket.emit('assistir:fim', atual), 2500);
-        }
-      },
-    },
+    playerVars: { autoplay: 1, mute: videoSemSom() ? 1 : 0, rel: 0, playsinline: 1, origin: location.origin },
+    events: { onReady: aplicarSomLive },
   });
 }
-socket.on('assistir', aplicarAssistir);
+
+function fecharPlayer() {
+  if (!player && !playerVideo) return;
+  player?.destroy?.();
+  player = null;
+  playerVideo = null;
+  mudoAssistir = null;
+  // o destroy troca a div do player por nada: recria pro próximo
+  if (!$('#player-live')) $('#player-live-box').prepend(Object.assign(document.createElement('div'), { id: 'player-live' }));
+}
+
+// na área: em cima do espaço do vídeo; fora dela: telinha no canto
+function posicionarPlayer() {
+  const box = $('#player-live-box');
+  box.hidden = liveVendo == null;
+  const slot = $('#slot-live');
+  const r = slot.getBoundingClientRect();
+  const naArea = estado.areaLive && r.width > 0;
+  box.classList.toggle('mini', !naArea);
+  Object.assign(box.style, naArea
+    ? { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` }
+    : { left: '', top: '', width: '', height: '' });
+}
+new ResizeObserver(posicionarPlayer).observe($('#slot-live'));
+addEventListener('resize', posicionarPlayer);
+$('.live-principal').addEventListener('scroll', posicionarPlayer);
+
+$('#live-voltar').onclick = abrirLive;
+$('#live-fechar').onclick = (e) => {
+  e.stopPropagation();
+  liveVendo = null;
+  renderLive();
+};
+
+// no surdo (ou mutado), o vídeo também fica mudo
+function aplicarSomLive() {
+  if (!player?.mute) return;
+  if (mudoAssistir === videoSemSom()) return;
+  mudoAssistir = videoSemSom();
+  if (mudoAssistir) player.mute();
+  else player.unMute();
+}
+setInterval(aplicarSomLive, 1000);
 
 function renderSomAssistir() {
-  const b = $('#btn-som-assistir');
+  const b = $('#btn-som-live');
   const mudo = videoSemSom();
   b.textContent = mudo ? '🔇 Desmutar' : '🔊 Mutar';
-  b.title = mudo ? 'Os próximos vídeos também ficam mudos até você desmutar' : 'Muta este e os próximos vídeos, até você desmutar';
+  b.title = mudo ? 'As próximas lives também ficam mudas até você desmutar' : 'Muta esta e as próximas lives, até você desmutar';
 }
-$('#btn-som-assistir').onclick = () => {
+$('#btn-som-live').onclick = () => {
   if (estado.surdo) return avisar('Você está com o som desligado (surdo).');
   mudarMudoFixo('videos', !mudoFixo.videos);
 };
@@ -4290,97 +4126,49 @@ function mudarMudoFixo(tipo, ligado) {
   mudoFixo[tipo] = ligado;
   salvarStorage('mudoFixo', mudoFixo);
   if (tipo === 'videos') {
-    sincronizarPlayer();
+    aplicarSomLive();
     renderSomAssistir();
   } else {
     atualizarAudios();
   }
 }
-renderSomAssistir();
 
-// Pular pela barra do YouTube nem sempre gera evento: percebe o pulo pelo tempo do vídeo
-// (andou bem mais ou voltou, comparado com o relógio) e avisa a sala. Depois confere se
-// ninguém ficou pra trás (internet travou, PC lento…).
-let ultimoT = null;
-let ultimoRelogio = 0;
-setInterval(() => {
-  const a = estado.assistir;
-  if (!player?.getPlayerState || !a || playerVideo !== a.video) {
-    ultimoT = null;
-    return;
-  }
-  const st = player.getPlayerState();
-  // carregando (muitas vezes porque a pessoa acabou de pular): espera, senão puxaria o vídeo de volta
-  if (st === YT.PlayerState.BUFFERING) return;
-  const agora = Date.now();
-  const t = player.getCurrentTime();
-  if (ultimoT != null && agora > aplicandoAte) {
-    const andou = t - ultimoT;
-    const passou = (agora - ultimoRelogio) / 1000;
-    const pulou = st === YT.PlayerState.PLAYING ? andou - passou > 2 || andou < -1 : Math.abs(andou) > 1;
-    if (pulou && Math.abs(t - posicaoEsperada()) > 1.5) {
-      estado.assistir = { ...a, posicao: t };
-      recebidoEm = agora;
-      socket.emit('assistir:controle', { tocando: a.tocando, posicao: t });
-    }
-  }
-  ultimoT = t;
-  ultimoRelogio = agora;
-  sincronizarPlayer();
-}, 1000);
+$('#btn-encerrar-live').onclick = () => {
+  const l = liveAtual();
+  if (!l || !confirm(`Encerrar "${l.titulo}"? Ela sai do Ao vivo pra todo mundo (no YouTube continua até você encerrar lá).`)) return;
+  socket.emit('live:encerrar', l.id, (r) => r?.erro && avisar(r.erro));
+};
 
-function abrirAssistir(e) {
-  e?.stopPropagation();
-  const painel = $('#painel-assistir');
-  if (!painel.hidden) return fecharPopovers();
+// pôr uma live: link + nome (opcional) + servidor (começa no aberto)
+function abrirNovaLive(link = '') {
   fecharPopovers();
-  painel.hidden = false;
-  const r = $('#btn-assistir').getBoundingClientRect();
-  const largura = painel.getBoundingClientRect().width;
-  painel.style.left = `${Math.max(8, Math.min(innerWidth - largura - 8, r.left + r.width / 2 - largura / 2))}px`;
-  painel.style.top = `${Math.max(8, r.top - painel.getBoundingClientRect().height - 10)}px`;
-  $('#link-assistir').value = '';
-  // já tem vídeo: escolhe entre tocar agora ou pôr na fila
-  $('#btn-fila-add').hidden = !estado.assistir;
-  $('#btn-tocar-agora').textContent = estado.assistir ? 'Tocar agora' : 'Assistir';
-  $('#link-assistir').focus();
+  if (!estado.servidores.length) return avisar('Entre num servidor primeiro: a live aparece pra galera dele.');
+  const sel = $('#live-servidor');
+  sel.replaceChildren(...estado.servidores.map((x) => new Option(x.nome, x.id)));
+  sel.value = estado.servidores.some((x) => x.id === estado.servidor.id) ? estado.servidor.id : estado.servidores[0].id;
+  $('#linha-live-servidor').hidden = estado.servidores.length < 2;
+  $('#live-link').value = link;
+  $('#live-nome').value = '';
+  $('#modal-live').hidden = false;
+  $(link ? '#live-nome' : '#live-link').focus();
 }
-$('#btn-assistir').onclick = abrirAssistir;
-$('#btn-trocar-video').onclick = abrirAssistir;
-async function enviarVideo(agora) {
-  const { video, lista } = linkDoYoutube($('#link-assistir').value);
-  if (!video && !lista) return avisar('Esse link não parece ser de um vídeo ou playlist do YouTube.');
-  let videos = [video];
-  let inicio = 0;
-  const botoes = [$('#btn-tocar-agora'), $('#btn-fila-add')];
-  if (lista) {
-    botoes.forEach((b) => (b.disabled = true));
-    const texto = $('#btn-tocar-agora').textContent;
-    $('#btn-tocar-agora').textContent = 'Abrindo playlist…';
-    try {
-      const ids = await videosDaPlaylist(lista);
-      videos = ids;
-      // link de um vídeo dentro da playlist: começa nele
-      inicio = video ? Math.max(0, ids.indexOf(video)) : 0;
-    } catch {
-      if (!video) return avisar('Não consegui abrir essa playlist (ela é privada?).');
-    } finally {
-      botoes.forEach((b) => (b.disabled = false));
-      $('#btn-tocar-agora').textContent = texto;
-    }
-  }
-  socket.emit('assistir:adicionar', { videos, agora, inicio }, (r) => {
-    if (r?.erro) return avisar(r.erro);
-    fecharPopovers();
-    if (r.cortados) avisar(`A fila só cabe 200 vídeos: ${r.cortados} ficaram de fora.`, 5000);
-    else if (!agora || videos.length > 1) avisar(videos.length > 1 ? `${r.adicionados} vídeos da playlist na fila.` : 'Vídeo adicionado na fila.', 3000);
-  });
-}
-$('#btn-fila-add').onclick = () => enviarVideo(false);
-$('#btn-parar-assistir').onclick = () => socket.emit('assistir:parar');
-$('#painel-assistir').onsubmit = (e) => {
+$$('[data-nova-live]').forEach((b) => (b.onclick = () => abrirNovaLive()));
+$('#btn-fechar-live').onclick = () => ($('#modal-live').hidden = true);
+$('#modal-live').onclick = (e) => { if (e.target.id === 'modal-live') e.target.hidden = true; };
+$('#form-live').onsubmit = (e) => {
   e.preventDefault();
-  enviarVideo(true);
+  const botao = e.target.querySelector('.btn-primario');
+  botao.disabled = true;
+  socket.emit('live:iniciar', { servidor: Number($('#live-servidor').value), link: $('#live-link').value, titulo: $('#live-nome').value }, (r) => {
+    botao.disabled = false;
+    if (r?.erro) return avisar(r.erro);
+    $('#modal-live').hidden = true;
+    liveEscolhida = r.id;
+    liveVendo = r.id;
+    estado.areaLive = true;
+    carregarLives();
+    render();
+  });
 };
 
 // ---------- qualidade da conexão na chamada ----------

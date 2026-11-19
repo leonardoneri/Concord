@@ -169,38 +169,23 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('um som por vez', !!(await emit(leo, 'som:tocar', 'buzina')).erro);
   ok('só quem enviou (ou admin) apaga', !!(await emit(ana, 'som:apagar', sons[0].id)).erro);
   ok('quem enviou apaga', !(await emit(leo, 'som:apagar', sons[0].id)).erro && (await emit(leo, 'sons:lista', srv1)).sons.length === 0);
-  // assistir junto
-  ok('link inválido não entra', !!(await emit(leo, 'assistir:iniciar', 'x<script>')).erro);
-  const comecou = proximo(ana, 'assistir');
-  ok('coloca vídeo', !(await emit(leo, 'assistir:iniciar', 'M7lc1UVf-VE')).erro);
-  ok('a sala recebe o vídeo', (await comecou)?.video === 'M7lc1UVf-VE');
-  const pausou = proximo(ana, 'assistir');
-  await emit(leo, 'assistir:controle', { tocando: false, posicao: 42 });
-  const p = await pausou;
-  ok('pausa e posição vão pra sala', p?.tocando === false && p.posicao === 42);
-  ok('posição inválida é recusada', !!(await emit(leo, 'assistir:controle', { tocando: true, posicao: -5 })).erro);
-  ok('quem não está na sala não controla', !!(await emit(bia, 'assistir:controle', { tocando: true, posicao: 1 })).erro);
-  // fila e playlist
-  const fila = proximo(ana, 'assistir');
-  await emit(leo, 'assistir:adicionar', { videos: ['aaaaaaaaaaa', 'bbbbbbbbbbb'] });
-  const f = await fila;
-  ok('adicionar à fila não troca o vídeo atual', f?.video === 'M7lc1UVf-VE' && f.fila.length === 3 && f.atual === 0);
-  const agora = proximo(ana, 'assistir');
-  await emit(leo, 'assistir:adicionar', { videos: ['ccccccccccc', 'ddddddddddd'], agora: true, inicio: 1 });
-  const g = await agora;
-  ok('tocar agora (playlist do meio) entra logo depois do atual', g?.video === 'ddddddddddd' && g.atual === 2 && g.fila.map((x) => x.video[0]).join('') === 'Mcdab');
-  ok('quem não está na sala não mexe na fila', !!(await emit(bia, 'assistir:pular', 0)).erro);
-  await emit(leo, 'assistir:pular', 4);
-  ok('pular pra um vídeo da fila', (await emit(ana, 'assistir:estado'))?.video === 'bbbbbbbbbbb');
-  await emit(ana, 'assistir:fim', 4);
-  ok('último acabou: fica pausado no fim', (await emit(ana, 'assistir:estado'))?.tocando === false);
-  await emit(leo, 'assistir:pular', 2);
-  await emit(leo, 'assistir:fim', 2);
-  await emit(ana, 'assistir:fim', 2); // aviso repetido não pula dois
-  ok('vídeo acabou: vai pro próximo (uma vez só)', (await emit(ana, 'assistir:estado'))?.atual === 3);
-  await emit(leo, 'assistir:remover', 3);
-  const r = await emit(ana, 'assistir:estado');
-  ok('remover o atual toca o que vem depois', r?.atual === 3 && r.video === 'bbbbbbbbbbb' && r.fila.length === 4);
+  // área "Ao vivo": lives do YouTube dos meus servidores
+  ok('link inválido não vira live', !!(await emit(leo, 'live:iniciar', { servidor: srv1, link: 'x<script>' })).erro);
+  ok('quem não é do servidor não põe live', !!(await emit(bia, 'live:iniciar', { servidor: srv1, link: 'M7lc1UVf-VE' })).erro);
+  const comecou = proximo(leo, 'live:mudou');
+  const { id: live1 } = await emit(ana, 'live:iniciar', { servidor: srv1, link: 'https://www.youtube.com/live/M7lc1UVf-VE?si=x', titulo: '  Live da   semana ' });
+  const aviso1 = await comecou;
+  ok('qualquer membro põe live e o servidor fica sabendo', aviso1?.comecou && aviso1.titulo === 'Live da semana' && aviso1.por === 'Ana');
+  const lista = await emit(leo, 'live:lista');
+  ok('a live aparece pra quem é do servidor', lista.length === 1 && lista[0].video === 'M7lc1UVf-VE' && lista[0].servidorNome === 'Galera');
+  ok('quem não é do servidor não vê', (await emit(bia, 'live:lista')).length === 0);
+  ok('o mesmo vídeo não entra duas vezes', !!(await emit(leo, 'live:iniciar', { servidor: srv1, link: 'youtu.be/M7lc1UVf-VE' })).erro);
+  const { id: live2 } = await emit(leo, 'live:iniciar', { servidor: srv1, link: 'https://youtu.be/aaaaaaaaaaa' });
+  ok('sem nome: usa o do YouTube (ou "Live")', (await emit(ana, 'live:lista')).find((l) => l.id === live2)?.titulo === 'Live');
+  ok('só quem pôs ou admin encerra', !!(await emit(ana, 'live:encerrar', live2)).erro);
+  const acabou = proximo(ana, 'live:mudou');
+  ok('admin encerra a live de outra pessoa', !(await emit(leo, 'live:encerrar', live1)).erro && (await acabou)?.comecou === false);
+  ok('quem pôs encerra a sua', !(await emit(leo, 'live:encerrar', live2)).erro && (await emit(ana, 'live:lista')).length === 0);
   // mapa da chamada (cada sala de voz pode ter o seu)
   ok('sala sem mapa não tem mapa', (await emit(leo, 'mapa:estado')) === null);
   const linhas = (c) => Array.from({ length: 8 }, () => c.repeat(10));
@@ -278,10 +263,6 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('tirar o quadro some com o recado', !(await emit(leo, 'mapa:estado')).mapa.recados['1,0']);
   leo.emit('voz:sair');
   ana.emit('voz:sair');
-  await espera(200);
-  await emit(leo, 'voz:entrar', voz);
-  ok('sala vazia: o vídeo para', (await emit(leo, 'assistir:estado')) === null);
-  leo.emit('voz:sair');
   await espera(200);
 }
 

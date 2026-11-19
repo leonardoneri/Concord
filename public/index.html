@@ -39,6 +39,7 @@
   <div id="app" hidden>
     <nav id="rail">
       <div class="rail-item" id="btn-dms" title="Mensagens diretas"><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="chat"></div></div>
+      <div class="rail-item" id="btn-live" title="Ao vivo: lives do YouTube com o chat do lado"><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="tv"></div></div>
       <div class="rail-item" id="btn-admin" title="Painel de admin" hidden><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="escudo"></div></div>
       <div class="rail-sep"></div>
       <div id="lista-servidores"></div>
@@ -140,31 +141,6 @@
 
         <section id="view-voz" hidden>
           <div id="grid">
-            <div id="assistir" hidden>
-              <div class="corpo-assistir">
-                <div class="video-assistir"><div id="player-assistir"></div></div>
-                <aside id="fila-assistir" hidden>
-                  <div class="titulo-fila" id="titulo-fila">Fila</div>
-                  <ol id="lista-fila"></ol>
-                </aside>
-                <aside id="chat-assistir" hidden>
-                  <div class="titulo-fila">Chat da live</div>
-                  <iframe id="iframe-chat" title="Chat da live do YouTube"></iframe>
-                </aside>
-              </div>
-              <button type="button" id="ampliar-assistir" title="Ampliar o vídeo"><span>Assistindo junto · clique pra ampliar</span></button>
-              <button type="button" class="btn-icone" id="fechar-flutuante" title="Esconder a telinha (o vídeo continua na call)" data-icone="fechar"></button>
-              <div class="barra-assistir">
-                <span id="info-assistir"></span>
-                <button type="button" class="btn-secundario" id="btn-som-assistir"></button>
-                <button type="button" class="btn-secundario" id="btn-chat-assistir" hidden>Chat</button>
-                <button type="button" class="btn-secundario" id="btn-fila-assistir">Fila</button>
-                <button type="button" class="btn-secundario" id="btn-proximo-video">Próximo ⏭</button>
-                <button type="button" class="btn-secundario" id="btn-trocar-video">+ Vídeo</button>
-                <button type="button" class="btn-secundario" id="btn-diminuir-assistir">Diminuir</button>
-                <button type="button" class="btn-secundario" id="btn-parar-assistir">Parar</button>
-              </div>
-            </div>
             <div id="palco"></div>
             <div id="mapa">
               <canvas id="tela-mapa" tabindex="0"></canvas>
@@ -222,11 +198,34 @@
             <button class="btn-redondo btn-tela" title="Compartilhar tela" data-icone="tela"></button>
             <button class="btn-redondo btn-mudo" title="Silenciar"></button>
             <button class="btn-redondo" id="btn-tira" title="Esconder participantes" data-icone="membros" hidden></button>
-            <button class="btn-redondo" id="btn-assistir" title="Assistir junto: um vídeo do YouTube sincronizado pra todo mundo da chamada" data-icone="tv"></button>
             <button class="btn-redondo" id="btn-mapa" title="Voltar pro mapa" data-icone="mapa" hidden></button>
             <button class="btn-redondo" id="btn-sons" title="Soundboard: tocar um som pra todo mundo da chamada" data-icone="sons"></button>
             <button class="btn-redondo" id="btn-times" title="Sortear times com quem está na chamada" data-icone="dado"></button>
             <button class="btn-redondo perigo btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
+          </div>
+        </section>
+
+        <section id="view-live" hidden>
+          <div class="live-vazio" id="live-vazio">
+            <h2>Nenhuma live agora</h2>
+            <p>Cole o link de uma live do YouTube e todo mundo do servidor recebe o aviso. Cada um assiste aqui, com o chat do lado, e pode sair que o vídeo continua num cantinho.</p>
+            <button type="button" class="btn-primario" data-nova-live>Pôr uma live</button>
+          </div>
+          <div class="live-conteudo" id="live-conteudo" hidden>
+            <div class="live-principal">
+              <div id="slot-live"></div>
+              <div class="live-cabeca">
+                <div class="live-textos">
+                  <h2><span class="selo-live">AO VIVO</span><span id="live-titulo"></span></h2>
+                  <p id="live-info"></p>
+                </div>
+                <button type="button" class="btn-secundario" id="btn-som-live"></button>
+                <button type="button" class="btn-secundario" data-nova-live>Pôr outra</button>
+                <button type="button" class="btn-secundario" id="btn-encerrar-live">Encerrar</button>
+              </div>
+              <div class="live-abas" id="live-abas"></div>
+            </div>
+            <aside id="chat-live"><iframe id="iframe-chat" title="Chat da live do YouTube"></iframe></aside>
           </div>
         </section>
 
@@ -463,15 +462,6 @@
     <button type="button" class="menu-botao" id="ms-editar-perfil">Editar perfil e configurações</button>
   </div>
   <div id="menu-pessoa" class="popover" hidden></div>
-  <form id="painel-assistir" class="popover" hidden>
-    <h3>Assistir junto</h3>
-    <p>Cole o link de um vídeo ou de uma playlist do YouTube. Toca sincronizado pra todo mundo da chamada, e qualquer um pode pausar, adiantar ou mexer na fila.</p>
-    <input id="link-assistir" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off">
-    <div class="acoes-assistir">
-      <button type="button" class="btn-secundario" id="btn-fila-add" hidden>Adicionar à fila</button>
-      <button class="btn-primario" id="btn-tocar-agora">Assistir</button>
-    </div>
-  </form>
   <form id="painel-enquete" class="popover" hidden>
     <h3>Nova enquete</h3>
     <input id="enquete-pergunta" maxlength="200" placeholder="Pergunta (ex.: Bora jogar que horas?)" autocomplete="off" required>
@@ -571,6 +561,27 @@
         </section>
       </div>
     </div>
+  </div>
+
+  <!-- o player do Ao vivo fica num lugar só (não recarrega): cobre o espaço do vídeo na área ou vira a telinha no canto -->
+  <div id="player-live-box" hidden>
+    <div id="player-live"></div>
+    <button type="button" id="live-voltar"><span id="live-voltar-texto">Ao vivo · clique pra abrir</span></button>
+    <button type="button" class="btn-icone" id="live-fechar" title="Parar de assistir" data-icone="fechar"></button>
+  </div>
+
+  <div id="modal-live" class="modal" hidden>
+    <form class="modal-caixa" id="form-live">
+      <header>
+        <h2>Pôr uma live</h2>
+        <button type="button" class="btn-icone" id="btn-fechar-live" title="Fechar" data-icone="fechar"></button>
+      </header>
+      <p>Comece a transmissão no YouTube (ou ache uma live) e cole o link aqui. Todo mundo do servidor recebe o aviso.</p>
+      <label>Link do YouTube<input id="live-link" placeholder="https://www.youtube.com/live/…" autocomplete="off" required></label>
+      <label>Nome (opcional)<input id="live-nome" maxlength="100" placeholder="Ex.: Campeonato de CS" autocomplete="off"></label>
+      <label id="linha-live-servidor">Servidor<select id="live-servidor"></select></label>
+      <button class="btn-primario">Pôr no Ao vivo</button>
+    </form>
   </div>
 
   <div id="modal-eventos" class="modal" hidden>

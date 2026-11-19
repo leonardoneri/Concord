@@ -11,7 +11,7 @@ const NOMES_CHAO = {
   _: 'Azulejo', '=': 'Tapete', k: 'Carpete', l: 'Pista de dança', '+': 'Porta',
 };
 const NOMES_OBJ = {
-  T: 'Árvore', Y: 'Coqueiro', S: 'Sofá', V: 'TV (tecla E: assistir junto)', M: 'Mesa', h: 'Cadeira', P: 'Planta', L: 'Estante',
+  T: 'Árvore', Y: 'Coqueiro', S: 'Sofá', V: 'TV (tecla E: Ao vivo)', M: 'Mesa', h: 'Cadeira', P: 'Planta', L: 'Estante',
   R: 'Quadro de recados (tecla E)', A: 'Fliperama', Q: 'Sinuca', D: 'Alvo de dardos', C: 'Computador', K: 'Cadeira gamer',
   G: 'Geladeira', F: 'Fogão', B: 'Balcão', k: 'Banquinho', E: 'Caixa de som', b: 'Banco', o: 'Fogueira', d: 'Puff',
   U: 'Guarda-sol', z: 'Espreguiçadeira',
@@ -983,8 +983,8 @@ function pintarAnimados(c, t) {
         c.fillRect(X, Y, T, T);
       }
     } else if (ch === 'V') {
-      // TV ligada quando tem vídeo no "assistir junto"
-      if (!estado.assistir) continue;
+      // TV ligada quando tem live no Ao vivo
+      if (!estado.lives?.length) continue;
       c.fillStyle = `hsl(${(t * 40 + x * 30) % 360} 60% 45%)`;
       c.fillRect(X + 1, Y + 2, 14, 7);
       c.fillStyle = 'rgba(255,255,255,.35)';
@@ -1505,13 +1505,7 @@ function objetoPerto() {
 function interagir() {
   const alvo = objetoPerto();
   if (!alvo) return;
-  if (alvo.o === 'V') {
-    if (estado.assistir) {
-      foco = 'assistir';
-      return renderGrid();
-    }
-    return abrirAssistir();
-  }
+  if (alvo.o === 'V') return abrirLive();
   if (alvo.o === 'R') abrirRecado(alvo.x, alvo.y);
 }
 
