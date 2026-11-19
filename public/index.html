@@ -151,6 +151,7 @@
               <button type="button" id="ampliar-assistir" title="Ampliar o vídeo"><span>Assistindo junto · clique pra ampliar</span></button>
               <div class="barra-assistir">
                 <span id="info-assistir"></span>
+                <button type="button" class="btn-secundario" id="btn-som-assistir"></button>
                 <button type="button" class="btn-secundario" id="btn-fila-assistir">Fila</button>
                 <button type="button" class="btn-secundario" id="btn-proximo-video">Próximo ⏭</button>
                 <button type="button" class="btn-secundario" id="btn-trocar-video">+ Vídeo</button>
@@ -312,6 +313,9 @@
         <label id="linha-ptt">Tecla do apertar pra falar
           <button type="button" class="btn-tecla" data-atalho="ptt"></button>
         </label>
+        <label class="ouvir-mic"><input type="checkbox" id="cfg-mudo-videos"> Vídeos do "assistir junto" começam sempre sem som</label>
+        <label class="ouvir-mic"><input type="checkbox" id="cfg-mudo-telas"> Transmissões de tela começam sempre sem som</label>
+        <p class="dica-cfg">Fica assim até você desligar aqui. Pra ouvir uma transmissão, clique com o botão direito em quem está transmitindo; pro vídeo, use o botão de som da barra do vídeo.</p>
         </section>
         <section data-aba="transmissao" hidden>
         <div class="linha-cfg">

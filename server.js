@@ -1144,13 +1144,14 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     for (const o of usuarios.values()) if (o.voz === canal) io.to(o.socket).emit('mapa', mapaPara(o, dados));
   }
 
-  function tirarDaVoz(filtro) {
+  // `por` = nome do admin que desconectou a pessoa (null = a sala sumiu / perdeu acesso)
+  function tirarDaVoz(filtro, por = null) {
     for (const o of usuarios.values()) {
       if (o.voz != null && filtro(o)) {
-        saiuDaCall(o.conta, ' (tirado da call)');
+        saiuDaCall(o.conta, por ? ` (desconectado por ${por})` : ' (tirado da call)');
         Object.assign(o, { voz: null, mic: null, camera: null, tela: null, pos: null });
         previas.delete(o.id);
-        io.to(o.socket).emit('voz:expulso');
+        io.to(o.socket).emit('voz:expulso', { por });
       }
     }
   }
@@ -1428,6 +1429,43 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       registrar(u.conta, 'servidor', `${admin ? 'deu' : 'tirou'} admin ${admin ? 'para' : 'de'} ${sql.contaPorId.get(conta)?.nome ?? '?'} em ${nomeServidor(srv)}`);
       emitirPerfis(srv);
       acessoMudou(srv);
+      ack({});
+    });
+
+    // ---------- mover / desconectar alguém da call (admin do servidor da sala) ----------
+    // quem dá pra mexer: está numa sala deste servidor, e o dono só o próprio dono mexe
+    function alvoNaVoz(u, conta, srv, ack) {
+      conta = Number(conta);
+      const salas = new Set(canaisDe(srv, 'voz').map((c) => c.id));
+      const sessoes = [...usuarios.values()].filter((o) => o.conta === conta && salas.has(o.voz));
+      if (!sessoes.length) return ack({ erro: 'Essa pessoa não está numa sala deste servidor' }), null;
+      if (conta === sql.servidor.get(srv).dono && u.conta !== conta) return ack({ erro: 'O dono do servidor não pode ser mexido' }), null;
+      return { conta, sessoes, nome: sql.contaPorId.get(conta)?.nome ?? '?' };
+    }
+
+    quandoAdmin('voz:mover', (u, { conta, canal } = {}, ack, srv) => {
+      const alvo = alvoNaVoz(u, conta, srv, ack);
+      if (!alvo) return;
+      const c = sql.canal.get(Number(canal));
+      if (!c || c.servidor !== srv || c.tipo !== 'voz') return ack({ erro: 'Escolha uma sala de voz deste servidor' });
+      if (!podeVerCanal(c, alvo.conta)) return ack({ erro: `${alvo.nome} não tem acesso a essa sala` });
+      if (alvo.sessoes.every((o) => o.voz === c.id)) return ack({ erro: `${alvo.nome} já está nessa sala` });
+      // quem entra de verdade é o app da pessoa (precisa refazer as conexões da chamada)
+      alvo.sessoes.forEach((o) => io.to(o.socket).emit('voz:movido', {
+        canal: c.id, nome: c.nome, servidor: srv, servidorNome: nomeServidor(srv), por: u.nome,
+      }));
+      registrar(u.conta, 'voz', `moveu ${alvo.nome} para ${ondeCanal(c)}`);
+      ack({});
+    });
+
+    quandoAdmin('voz:desconectar', (u, { conta } = {}, ack, srv) => {
+      const alvo = alvoNaVoz(u, conta, srv, ack);
+      if (!alvo) return;
+      const salas = new Set(canaisDe(srv, 'voz').map((c) => c.id));
+      tirarDaVoz((o) => o.conta === alvo.conta && salas.has(o.voz), u.nome);
+      registrar(u.conta, 'voz', `desconectou ${alvo.nome} da call em ${nomeServidor(srv)}`);
+      emitirPresenca();
+      limparAssistir();
       ack({});
     });
 

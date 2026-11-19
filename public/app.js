@@ -129,6 +129,10 @@ const volumes = lerStorage('volumes', {});
 const ajustes = lerStorage('ajustes', {});
 const dispositivos = lerStorage('dispositivos', { mic: '', cam: '', saida: '' });
 const transmissao = lerStorage('transmissao', { resolucao: '1080', fps: 30 });
+// "mudo fixo": vídeo do assistir junto / transmissões de tela começam sem som até eu desligar isso
+const mudoFixo = lerStorage('mudoFixo', { videos: false, telas: false });
+let somDoVideo = false; // com o mudo fixo dos vídeos: liguei o som (vale até sair da sala)
+const telasComSom = new Set(); // com o mudo fixo das telas: transmissões (id do stream) que eu quis ouvir
 let meuBoneco = lerStorage('boneco', null); // como é o meu boneco no mapa da chamada
 
 let toastTimer;
@@ -809,10 +813,20 @@ socket.on('canal:apagado', ({ id }) => {
 });
 
 // o canal de voz em que eu estava foi apagado (ou saí do servidor dele)
-socket.on('voz:expulso', () => {
+socket.on('voz:expulso', ({ por } = {}) => {
   if (!estado.voz) return;
   sairVoz(false);
-  avisar('A sala em que você estava não existe mais (ou você saiu do servidor), então você saiu da chamada.');
+  avisar(por ? `${por} te desconectou da chamada.` : 'A sala em que você estava não existe mais (ou você saiu do servidor), então você saiu da chamada.', 8000);
+});
+
+// um admin me mudou de sala: entro na nova (pode ser de um servidor que não está aberto na tela)
+socket.on('voz:movido', async ({ canal, nome, servidor, servidorNome, por }) => {
+  if (!estado.voz) return;
+  await entrarVoz(canal);
+  if (estado.voz !== canal) return;
+  estado.vozInfo = { canal: nome, servidor: servidorNome, servidorId: servidor };
+  render();
+  avisar(`${por} te moveu para ${nome}.`, 8000);
 });
 
 socket.on('renomeado', ({ de, para }) => {
@@ -2453,6 +2467,8 @@ function sairVoz(avisarServidor = true) {
   estado.voz = null;
   estado.vozInfo = null;
   estado.assistir = null;
+  somDoVideo = false;
+  telasComSom.clear();
   fecharPlayer();
   aplicarMapa(null);
   Object.assign(minhaRede, { ping: null, perda: null, ruinsSeguidas: 0, enviado: null });
@@ -3080,7 +3096,8 @@ function atualizarAudios() {
         if (tipo === 'mic') monitorarFala(id, stream);
       }
       aplicarSaida(audio);
-      const silenciado = estado.surdo || (tipo === 'mic' && ajustes[u.nome]?.mudo);
+      const silenciado = estado.surdo || (tipo === 'mic' && ajustes[u.nome]?.mudo)
+        || (tipo === 'tela' && mudoFixo.telas && !telasComSom.has(u.tela));
       const volume = silenciado ? 0 : volumeDe(u.nome, tipo) * (tipo === 'mic' ? fatorMapa(id) : 1);
       // acima de 100% o <audio> não alcança: toca pelo GainNode e o <audio> fica mudo
       // (mas continua tocando — o Chrome só entrega o áudio do WebRTC se houver um elemento)
@@ -3103,13 +3120,27 @@ function abrirMenuPessoa(id, evento) {
   evento.stopPropagation();
   const u = estado.usuarios.find((x) => x.id === id);
   if (!u) return;
-  if (id === estado.eu.id || !estado.voz || u.voz !== estado.voz) return abrirPerfil(u.nome, evento);
+  const moderacao = itensDeModeracao(u);
+  const naMinhaCall = id !== estado.eu.id && estado.voz && u.voz === estado.voz;
+  if (!naMinhaCall && !moderacao.length) return abrirPerfil(u.nome, evento);
   const a = ajustes[u.nome] ?? {};
   const menu = $('#menu-pessoa');
   menu.dataset.pessoa = id;
 
   const titulo = el('div', 'menu-titulo');
   titulo.append(avatar(u), el('span', null, u.nome));
+  const perfil = el('button', 'menu-botao', 'Ver perfil');
+  perfil.onclick = (e) => abrirPerfil(u.nome, e);
+  const mostrarMenu = (itens) => {
+    menu.replaceChildren(...itens);
+    fecharPopovers();
+    menu.hidden = false;
+    const { width, height } = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(evento.clientX, innerWidth - width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(evento.clientY, innerHeight - height - 8))}px`;
+  };
+  // fora da minha call: só o que o admin pode fazer
+  if (!naMinhaCall) return mostrarMenu([titulo, ...moderacao, el('hr'), perfil]);
 
   const slider = (rotulo, tipo) => {
     const caixa = el('label', 'menu-slider');
@@ -3147,17 +3178,50 @@ function abrirMenuPessoa(id, evento) {
   };
 
   const itens = [titulo, slider('Volume do usuário', 'mic'), opcao('Silenciar pra mim', 'mudo')];
-  if (u.tela) itens.push(el('hr'), slider('Volume da transmissão', 'tela'), opcao('Ocultar transmissão', 'ocultarTela', 'Para de receber o vídeo da tela'));
+  if (u.tela) {
+    itens.push(el('hr'), slider('Volume da transmissão', 'tela'));
+    if (mudoFixo.telas) {
+      const ouvir = el('label', 'menu-opcao');
+      const c = el('input');
+      c.type = 'checkbox';
+      c.checked = telasComSom.has(u.tela);
+      c.onchange = () => {
+        if (c.checked) telasComSom.add(u.tela);
+        else telasComSom.delete(u.tela);
+        atualizarAudios();
+      };
+      const texto = el('span', null, 'Ouvir esta transmissão');
+      texto.append(el('small', null, 'As transmissões começam sem som (Configurações > Voz e vídeo)'));
+      ouvir.append(texto, c);
+      itens.push(ouvir);
+    }
+    itens.push(opcao('Ocultar transmissão', 'ocultarTela', 'Para de receber o vídeo da tela'));
+  }
   itens.push(el('hr'), opcao('Ocultar câmera', 'ocultarCam'), opcao('Qualidade baixa', 'baixa', 'Economiza internet: recebe o vídeo em resolução menor'));
-  const perfil = el('button', 'menu-botao', 'Ver perfil');
-  perfil.onclick = (e) => abrirPerfil(u.nome, e);
+  if (moderacao.length) itens.push(el('hr'), ...moderacao);
   itens.push(el('hr'), perfil);
-  menu.replaceChildren(...itens);
-  fecharPopovers();
-  menu.hidden = false;
-  const { width, height } = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(8, Math.min(evento.clientX, innerWidth - width - 8))}px`;
-  menu.style.top = `${Math.max(8, Math.min(evento.clientY, innerHeight - height - 8))}px`;
+  mostrarMenu(itens);
+}
+
+// Admin do servidor aberto: mover a pessoa pra outra sala dele ou tirar da call (o dono, só ele mesmo)
+function itensDeModeracao(u) {
+  if (u.id === estado.eu.id || !souAdmin() || !estado.canaisVoz.some((c) => c.id === u.voz)) return [];
+  if (u.conta === estado.servidor.dono && !souDono()) return [];
+  const pedir = (evento, dados) => {
+    fecharPopovers();
+    socket.emit(evento, dados, (r) => r?.erro && avisar(r.erro));
+  };
+  const itens = [el('div', 'menu-secao', 'Mover para')];
+  for (const c of estado.canaisVoz.filter((x) => x.id !== u.voz)) {
+    const b = el('button', 'menu-botao menu-sala', c.nome);
+    b.prepend(icone('voz'));
+    b.onclick = () => pedir('voz:mover', { conta: u.conta, canal: c.id });
+    itens.push(b);
+  }
+  const sair = el('button', 'menu-botao perigo', 'Desconectar da call');
+  sair.onclick = () => pedir('voz:desconectar', { conta: u.conta });
+  itens.push(sair);
+  return itens;
 }
 
 // ---------- prévia da transmissão ao passar o mouse ----------
@@ -3895,7 +3959,8 @@ let playerVideo = null;
 let ytPronto = null;
 let recebidoEm = 0; // quando chegou o estado (pra calcular onde o vídeo deveria estar agora)
 let aplicandoAte = 0; // mudanças feitas pelo próprio app (não são cliques da pessoa)
-let surdoAssistir = null;
+let mudoAssistir = null; // como o player está agora (null = ainda não sei)
+const videoSemSom = () => estado.surdo || (mudoFixo.videos && !somDoVideo);
 
 // { video, lista }: vídeo e/ou playlist de um link do YouTube
 function linkDoYoutube(texto) {
@@ -3995,12 +4060,13 @@ function sincronizarPlayer() {
     aplicandoAte = Date.now() + 1500;
     player.pauseVideo();
   }
-  // no surdo, o vídeo também fica mudo
-  if (surdoAssistir !== estado.surdo) {
-    surdoAssistir = estado.surdo;
-    if (estado.surdo) player.mute();
+  // no surdo (ou com o mudo fixo), o vídeo também fica mudo
+  if (mudoAssistir !== videoSemSom()) {
+    mudoAssistir = videoSemSom();
+    if (mudoAssistir) player.mute();
     else player.unMute();
   }
+  renderSomAssistir();
 }
 
 // a pessoa deu play/pause/pulou no player: avisa a sala (se for diferente do que todo mundo já está vendo)
@@ -4087,7 +4153,7 @@ function fecharPlayer() {
   player?.destroy?.();
   player = null;
   playerVideo = null;
-  surdoAssistir = null;
+  mudoAssistir = null;
   $('#assistir').hidden = true;
   // o destroy troca a div do player por nada: recria pro próximo vídeo
   if (!$('#player-assistir')) $('.video-assistir').append(Object.assign(document.createElement('div'), { id: 'player-assistir' }));
@@ -4120,7 +4186,8 @@ async function aplicarAssistir(a) {
   }
   player = new YT.Player('player-assistir', {
     videoId: a.video,
-    playerVars: { autoplay: 1, start: Math.floor(posicaoEsperada()), rel: 0, playsinline: 1, origin: location.origin },
+    // já nasce mudo se for pra ficar mudo (senão dá um pedaço de som antes)
+    playerVars: { autoplay: 1, mute: videoSemSom() ? 1 : 0, start: Math.floor(posicaoEsperada()), rel: 0, playsinline: 1, origin: location.origin },
     events: {
       onReady: () => {
         aplicandoAte = Date.now() + 2000;
@@ -4148,6 +4215,48 @@ async function aplicarAssistir(a) {
   });
 }
 socket.on('assistir', aplicarAssistir);
+
+function renderSomAssistir() {
+  const b = $('#btn-som-assistir');
+  const mudo = videoSemSom();
+  b.textContent = mudo ? '🔇 Sem som' : '🔊 Com som';
+  b.title = mudoFixo.videos
+    ? 'Os vídeos começam sem som (Configurações > Voz e vídeo). Clique pra ouvir este.'
+    : 'Clique pra deixar todos os vídeos sem som até você ligar de novo';
+}
+$('#btn-som-assistir').onclick = () => {
+  if (estado.surdo) return avisar('Você está com o som desligado (surdo).');
+  if (mudoFixo.videos) {
+    // mudo fixo ligado: o botão liga/desliga o som só enquanto estou nesta sala
+    somDoVideo = !somDoVideo;
+  } else {
+    // sem mudo fixo: desligar o som aqui já liga o mudo fixo (o próximo vídeo continua mudo)
+    mudarMudoFixo('videos', true);
+    somDoVideo = false;
+  }
+  sincronizarPlayer();
+  renderSomAssistir();
+};
+
+function mudarMudoFixo(tipo, ligado) {
+  mudoFixo[tipo] = ligado;
+  salvarStorage('mudoFixo', mudoFixo);
+  if (tipo === 'videos') {
+    somDoVideo = false;
+    sincronizarPlayer();
+    renderSomAssistir();
+  } else {
+    telasComSom.clear();
+    atualizarAudios();
+  }
+  $('#cfg-mudo-videos').checked = mudoFixo.videos;
+  $('#cfg-mudo-telas').checked = mudoFixo.telas;
+}
+$('#cfg-mudo-videos').checked = mudoFixo.videos;
+$('#cfg-mudo-telas').checked = mudoFixo.telas;
+$('#cfg-mudo-videos').onchange = (e) => mudarMudoFixo('videos', e.target.checked);
+$('#cfg-mudo-telas').onchange = (e) => mudarMudoFixo('telas', e.target.checked);
+renderSomAssistir();
 
 // Pular pela barra do YouTube nem sempre gera evento: percebe o pulo pelo tempo do vídeo
 // (andou bem mais ou voltou, comparado com o relógio) e avisa a sala. Depois confere se

@@ -285,6 +285,31 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   await espera(200);
 }
 
+// ---------- mover / desconectar da call ----------
+{
+  const [sala1, sala2] = aberto.servidor.canais.filter((c) => c.tipo === 'voz').map((c) => c.id);
+  const caio = await pessoa('caio', 'Caio', convite);
+  await emit(caio, 'servidor:abrir', srv1);
+  await emit(ana, 'voz:entrar', sala1);
+  ok('quem não é admin não move ninguém', !!(await emit(caio, 'voz:mover', { conta: ana.conta, canal: sala2 })).erro);
+  ok('não move quem não está em call', !!(await emit(leo, 'voz:mover', { conta: caio.conta, canal: sala2 })).erro);
+  const movido = proximo(ana, 'voz:movido');
+  ok('admin move pra outra sala', !(await emit(leo, 'voz:mover', { conta: ana.conta, canal: sala2 })).erro);
+  const mv = await movido;
+  ok('a pessoa recebe pra onde foi e quem moveu', mv?.canal === sala2 && mv.por === 'Leo' && mv.servidorNome === 'Galera');
+  ok('não move pra mesma sala', !!(await emit(leo, 'voz:mover', { conta: ana.conta, canal: sala1 })).erro);
+  await emit(ana, 'voz:entrar', sala2);
+  await emit(leo, 'voz:entrar', sala1);
+  ok('ninguém mexe no dono', !!(await emit(caio, 'voz:desconectar', { conta: leo.conta })).erro);
+  const expulso = proximo(ana, 'voz:expulso');
+  ok('admin desconecta da call', !(await emit(leo, 'voz:desconectar', { conta: ana.conta })).erro);
+  ok('a pessoa sabe quem desconectou', (await expulso)?.por === 'Leo');
+  ok('e sai mesmo da sala', !!(await emit(leo, 'voz:mover', { conta: ana.conta, canal: sala1 })).erro);
+  leo.emit('voz:sair');
+  caio.disconnect();
+  await espera(100);
+}
+
 // ---------- painel de admin (admin do Concord) ----------
 {
   ok('quem não é admin do Concord não vê o painel', !!(await emit(leo, 'adm:contas')).erro);
