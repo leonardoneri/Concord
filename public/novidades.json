@@ -1,5 +1,15 @@
 [
   {
+    "versao": "1.0.19",
+    "itens": [
+      "Live do YouTube no assistir junto: o chat da live aparece do lado do vídeo",
+      "Telinha: saindo da tela da call com vídeo passando, ele continua num cantinho; clique pra voltar pra call",
+      "Botão Mutar no vídeo: os próximos vídeos também entram mudos até você desmutar (e \"Mutar transmissões\" no clique direito de quem transmite)",
+      "Conversa direta aceita arquivo de até 1 GB, mostrando quanto já foi enviado",
+      "Admins podem mover alguém pra outra sala ou desconectar da call pelo clique direito na pessoa"
+    ]
+  },
+  {
     "versao": "1.0.18",
     "itens": [
       "Logo novo do Concord: o C roxo com olhinhos, no app, no instalador e no site"
