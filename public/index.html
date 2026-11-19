@@ -39,7 +39,7 @@
   <div id="app" hidden>
     <nav id="rail">
       <div class="rail-item" id="btn-dms" title="Mensagens diretas"><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="chat"></div></div>
-      <div class="rail-item" id="btn-live" title="Ao vivo: lives do YouTube com o chat do lado"><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="tv"></div></div>
+      <div class="rail-item" id="btn-live" title="Ao vivo: lives do YouTube e da Kick com o chat do lado"><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="tv"></div></div>
       <div class="rail-item" id="btn-admin" title="Painel de admin" hidden><span class="pill"></span><div class="icone-servidor icone-dm" data-icone="escudo"></div></div>
       <div class="rail-sep"></div>
       <div id="lista-servidores"></div>
@@ -208,7 +208,7 @@
         <section id="view-live" hidden>
           <div class="live-vazio" id="live-vazio">
             <h2>Nenhuma live agora</h2>
-            <p>Cole o link de uma live do YouTube e todo mundo do servidor recebe o aviso. Cada um assiste aqui, com o chat do lado, e pode sair que o vídeo continua num cantinho.</p>
+            <p>Cole o link de uma live do YouTube ou da Kick e todo mundo do servidor recebe o aviso. Cada um assiste aqui, com o chat do lado, e pode sair que o vídeo continua num cantinho.</p>
             <button type="button" class="btn-primario" data-nova-live>Pôr uma live</button>
           </div>
           <div class="live-conteudo" id="live-conteudo" hidden>
@@ -225,7 +225,7 @@
               </div>
               <div class="live-abas" id="live-abas"></div>
             </div>
-            <aside id="chat-live"><iframe id="iframe-chat" title="Chat da live do YouTube"></iframe></aside>
+            <aside id="chat-live"><iframe id="iframe-chat" title="Chat da live"></iframe></aside>
           </div>
         </section>
 
@@ -566,6 +566,7 @@
   <!-- o player do Ao vivo fica num lugar só (não recarrega): cobre o espaço do vídeo na área ou vira a telinha no canto -->
   <div id="player-live-box" hidden>
     <div id="player-live"></div>
+    <iframe id="player-kick" title="Live da Kick" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen hidden></iframe>
     <button type="button" id="live-voltar"><span id="live-voltar-texto">Ao vivo · clique pra abrir</span></button>
     <button type="button" class="btn-icone" id="live-fechar" title="Parar de assistir" data-icone="fechar"></button>
   </div>
@@ -576,8 +577,8 @@
         <h2>Pôr uma live</h2>
         <button type="button" class="btn-icone" id="btn-fechar-live" title="Fechar" data-icone="fechar"></button>
       </header>
-      <p>Comece a transmissão no YouTube (ou ache uma live) e cole o link aqui. Todo mundo do servidor recebe o aviso.</p>
-      <label>Link do YouTube<input id="live-link" placeholder="https://www.youtube.com/live/…" autocomplete="off" required></label>
+      <p>Comece a transmissão no YouTube ou na Kick (ou ache uma live) e cole o link aqui. Todo mundo do servidor recebe o aviso.</p>
+      <label>Link do YouTube ou da Kick<input id="live-link" placeholder="youtube.com/live/… ou kick.com/canal" autocomplete="off" required></label>
       <label>Nome (opcional)<input id="live-nome" maxlength="100" placeholder="Ex.: Campeonato de CS" autocomplete="off"></label>
       <label id="linha-live-servidor">Servidor<select id="live-servidor"></select></label>
       <button class="btn-primario">Pôr no Ao vivo</button>

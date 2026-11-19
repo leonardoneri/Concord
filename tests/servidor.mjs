@@ -185,6 +185,12 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('só quem pôs ou admin encerra', !!(await emit(ana, 'live:encerrar', live2)).erro);
   const acabou = proximo(ana, 'live:mudou');
   ok('admin encerra a live de outra pessoa', !(await emit(leo, 'live:encerrar', live1)).erro && (await acabou)?.comecou === false);
+  const { id: live3 } = await emit(leo, 'live:iniciar', { servidor: srv1, link: 'kick.com/Gaules?x=1' });
+  const kick = (await emit(ana, 'live:lista')).find((l) => l.id === live3);
+  ok('live da Kick: guarda o canal', kick?.plataforma === 'kick' && kick.video === 'gaules' && kick.titulo === 'gaules na Kick');
+  ok('a mesma live da Kick não entra duas vezes', !!(await emit(leo, 'live:iniciar', { servidor: srv1, link: 'https://player.kick.com/gaules' })).erro);
+  ok('página da Kick que não é canal é recusada', !!(await emit(leo, 'live:iniciar', { servidor: srv1, link: 'https://kick.com/categories' })).erro);
+  await emit(leo, 'live:encerrar', live3);
   ok('quem pôs encerra a sua', !(await emit(leo, 'live:encerrar', live2)).erro && (await emit(ana, 'live:lista')).length === 0);
   // mapa da chamada (cada sala de voz pode ter o seu)
   ok('sala sem mapa não tem mapa', (await emit(leo, 'mapa:estado')) === null);

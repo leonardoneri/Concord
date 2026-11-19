@@ -1497,6 +1497,7 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 #player-live-box { position: fixed; z-index: 15; background: #000; border-radius: 8px; overflow: hidden; }
 #player-live-box[hidden] { display: none; }
 #player-live-box iframe, #player-live { width: 100%; height: 100%; border: 0; display: block; }
+#player-live-box [hidden], #player-live-box.kick #player-live { display: none; }
 #live-voltar, #live-fechar { display: none; }
 /* telinha: fora da área, a live continua num cantinho */
 #player-live-box.mini { right: 20px; bottom: 96px; width: 384px; height: 216px; box-shadow: 0 8px 24px #000a; }

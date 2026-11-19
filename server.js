@@ -233,6 +233,28 @@ function idDoYoutube(texto) {
   } catch {}
   return null;
 }
+// live da Kick: o canal (kick.com/canal, player.kick.com/canal, kick.com/popout/canal/chat)
+const NAO_SAO_CANAIS = new Set(['popout', 'categories', 'category', 'browse', 'following', 'search', 'video', 'videos', 'clips', 'dashboard']);
+function canalDaKick(texto) {
+  try {
+    const u = new URL(texto);
+    if (!/^((www|player)\.)?kick\.com$/.test(u.hostname)) return null;
+    const partes = u.pathname.split('/').filter(Boolean);
+    const canal = partes[0] === 'popout' ? partes[1] : partes[0];
+    return canal && /^[A-Za-z0-9_-]{1,40}$/.test(canal) && !NAO_SAO_CANAIS.has(canal.toLowerCase()) ? canal.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+// link colado no Ao vivo -> { plataforma, video } (na Kick o "video" é o canal)
+function linkDaLive(texto) {
+  texto = String(texto ?? '').trim();
+  const comEsquema = /^[a-z]+:\/\//i.test(texto) ? texto : `https://${texto}`;
+  const canal = canalDaKick(comEsquema);
+  if (canal) return { plataforma: 'kick', video: canal };
+  const video = idDoYoutube(texto) ?? idDoYoutube(comEsquema);
+  return video ? { plataforma: 'youtube', video } : null;
+}
 const titulosYoutube = new Map(); // id do vídeo -> título (null = privado/apagado)
 async function tituloYoutube(id) {
   if (titulosYoutube.has(id)) return titulosYoutube.get(id);
@@ -563,6 +585,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       servidor INTEGER NOT NULL,
       video TEXT NOT NULL,
+      plataforma TEXT NOT NULL DEFAULT 'youtube',
       titulo TEXT NOT NULL,
       conta INTEGER NOT NULL,
       criado_em INTEGER NOT NULL
@@ -587,6 +610,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     canais: { servidor: 'INTEGER', privado: 'INTEGER NOT NULL DEFAULT 0', mapa: 'TEXT' },
     cargos: { construtor: 'INTEGER NOT NULL DEFAULT 0' },
     servidores: { entrada: 'INTEGER' },
+    lives: { plataforma: "TEXT NOT NULL DEFAULT 'youtube'" },
   };
   for (const [tabela, colunas] of Object.entries(colunasNovas)) {
     const existentes = new Set(db.prepare(`PRAGMA table_info(${tabela})`).all().map((c) => c.name));
@@ -745,9 +769,9 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       JOIN membros m ON m.servidor = l.servidor AND m.conta = ? JOIN servidores s ON s.id = l.servidor
       LEFT JOIN contas c ON c.id = l.conta ORDER BY l.id`),
     live: db.prepare('SELECT * FROM lives WHERE id = ?'),
-    liveDoVideo: db.prepare('SELECT 1 FROM lives WHERE servidor = ? AND video = ?'),
+    liveDoVideo: db.prepare('SELECT 1 FROM lives WHERE servidor = ? AND plataforma = ? AND video = ?'),
     contarLives: db.prepare('SELECT COUNT(*) AS n FROM lives WHERE servidor = ?'),
-    criarLive: db.prepare('INSERT INTO lives (servidor, video, titulo, conta, criado_em) VALUES (?, ?, ?, ?, ?)'),
+    criarLive: db.prepare('INSERT INTO lives (servidor, plataforma, video, titulo, conta, criado_em) VALUES (?, ?, ?, ?, ?, ?)'),
     apagarLive: db.prepare('DELETE FROM lives WHERE id = ?'),
     apagarLivesDo: db.prepare('DELETE FROM lives WHERE servidor = ?'),
     registrar: db.prepare('INSERT INTO atividades (conta, nome, tipo, texto, criado_em) VALUES (?, ?, ?, ?, ?)'),
@@ -2117,7 +2141,7 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
 
     // ---------- área "Ao vivo": lives do YouTube dos meus servidores ----------
     const livePublica = (l) => ({
-      id: l.id, servidor: l.servidor, servidorNome: l.servidor_nome, video: l.video, titulo: l.titulo,
+      id: l.id, servidor: l.servidor, servidorNome: l.servidor_nome, plataforma: l.plataforma, video: l.video, titulo: l.titulo,
       conta: l.conta, por: l.por ?? 'alguém', criado_em: l.criado_em,
     });
     quando('live:lista', (u, _, ack) => ack(sql.livesDa.all(u.conta).map(livePublica)));
@@ -2126,13 +2150,13 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     quando('live:iniciar', async (u, { servidor, link, titulo } = {}, ack) => {
       servidor = Number(servidor);
       if (!ehMembro(servidor, u.conta)) return ack({ erro: 'Você não está nesse servidor' });
-      const video = idDoYoutube(link);
-      if (!video) return ack({ erro: 'Confira o link do YouTube' });
-      if (sql.liveDoVideo.get(servidor, video)) return ack({ erro: 'Esse vídeo já está no Ao vivo' });
+      const { plataforma, video } = linkDaLive(link) ?? {};
+      if (!video) return ack({ erro: 'Confira o link: tem que ser uma live do YouTube ou da Kick' });
+      if (sql.liveDoVideo.get(servidor, plataforma, video)) return ack({ erro: 'Essa live já está no Ao vivo' });
       if (sql.contarLives.get(servidor).n >= MAX_LIVES) return ack({ erro: `Dá pra ter no máximo ${MAX_LIVES} lives ao mesmo tempo` });
       titulo = String(titulo ?? '').replace(/[\p{C}]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 100)
-        || (await tituloYoutube(video))?.slice(0, 100) || 'Live';
-      const { lastInsertRowid } = sql.criarLive.run(servidor, video, titulo, u.conta, Date.now());
+        || (plataforma === 'kick' ? `${video} na Kick` : (await tituloYoutube(video))?.slice(0, 100)) || 'Live';
+      const { lastInsertRowid } = sql.criarLive.run(servidor, plataforma, video, titulo, u.conta, Date.now());
       const id = Number(lastInsertRowid);
       registrar(u.conta, 'live', `pôs a live "${titulo}" em ${nomeServidor(servidor)}`);
       io.to(sala(servidor)).emit('live:mudou', { id, servidor, comecou: true, titulo, por: u.nome, conta: u.conta });

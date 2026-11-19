@@ -3941,7 +3941,7 @@ $('#form-som').onsubmit = async (e) => {
   });
 };
 
-// ---------- área "Ao vivo": lives do YouTube (ícone no menu da esquerda) ----------
+// ---------- área "Ao vivo": lives do YouTube e da Kick (ícone no menu da esquerda) ----------
 // O player fica num lugar só da tela (#player-live-box), senão o YouTube recarrega: na área ele cobre o espaço
 // do vídeo; fora dela vira a telinha no canto. Cada um assiste no seu ritmo, com o chat do YouTube do lado.
 let player = null;
@@ -3949,11 +3949,17 @@ let playerVideo = null;
 let ytPronto = null;
 let mudoAssistir = null; // como o player está agora (null = ainda não sei)
 const videoSemSom = () => estado.surdo || mudoFixo.videos;
-estado.lives = []; // lives dos meus servidores: { id, servidor, servidorNome, video, titulo, conta, por, criado_em }
+estado.lives = []; // lives dos meus servidores: { id, servidor, servidorNome, plataforma, video (na Kick, o canal), titulo, conta, por, criado_em }
 estado.areaLive = false; // a área está aberta na tela
 let liveVendo = null; // id da live tocando no player (null = nenhuma: fechei a telinha)
 let liveEscolhida = null; // aba escolhida na área, quando tem mais de uma
 let chatDoVideo = null;
+let kickTocando = null; // canal da Kick no player (null = é o do YouTube)
+const ehKick = (l) => l?.plataforma === 'kick';
+const linkDoChat = (l) => ehKick(l)
+  ? `https://kick.com/popout/${l.video}/chat`
+  // o do YouTube só abre se souber em qual site está
+  : `https://www.youtube.com/live_chat?v=${l.video}&embed_domain=${encodeURIComponent(location.hostname)}&dark_theme=1`;
 
 function carregarYoutube() {
   ytPronto ??= new Promise((resolve, reject) => {
@@ -4008,7 +4014,7 @@ function renderLive() {
   const area = estado.areaLive;
   $('#btn-live').classList.toggle('ativo', area);
   $('#btn-live').classList.toggle('tem-live', estado.lives.length > 0);
-  $('#btn-live').title = estado.lives.length ? `Ao vivo agora: ${estado.lives.map((l) => l.titulo).join(', ')}` : 'Ao vivo: lives do YouTube com o chat do lado';
+  $('#btn-live').title = estado.lives.length ? `Ao vivo agora: ${estado.lives.map((l) => l.titulo).join(', ')}` : 'Ao vivo: lives do YouTube e da Kick com o chat do lado';
   $('#app').classList.toggle('na-live', area);
   renderRail();
   const l = liveAtual();
@@ -4018,7 +4024,7 @@ function renderLive() {
     $('#live-conteudo').hidden = !l;
     if (l) {
       $('#live-titulo').textContent = l.titulo;
-      $('#live-info').textContent = `${l.servidorNome} · pôs ${l.por} ${fmtQuando(l.criado_em)}`;
+      $('#live-info').textContent = `${ehKick(l) ? 'Kick' : 'YouTube'} · ${l.servidorNome} · pôs ${l.por} ${fmtQuando(l.criado_em)}`;
       const meuServidor = estado.servidores.find((x) => x.id === l.servidor);
       $('#btn-encerrar-live').hidden = !(l.conta === estado.eu?.conta || meuServidor?.dono === estado.eu?.conta
         || (l.servidor === estado.servidor.id && souAdmin()));
@@ -4034,18 +4040,22 @@ function renderLive() {
       }) : []));
     }
   }
-  // chat do YouTube do lado (ele só abre se souber em qual site está)
-  const chat = area && l ? l.video : null;
+  // chat da live do lado
+  const chat = area && l ? linkDoChat(l) : null;
   if (chat !== chatDoVideo) {
     chatDoVideo = chat;
-    $('#iframe-chat').src = chat
-      ? `https://www.youtube.com/live_chat?v=${chat}&embed_domain=${encodeURIComponent(location.hostname)}&dark_theme=1`
-      : 'about:blank';
+    $('#iframe-chat').src = chat ?? 'about:blank';
   }
   const vendo = estado.lives.find((x) => x.id === liveVendo);
   $('#live-voltar-texto').textContent = vendo ? `🔴 ${vendo.titulo} · clique pra abrir` : '';
-  if (vendo) tocarLive(vendo.video);
-  else fecharPlayer();
+  if (ehKick(vendo)) {
+    fecharPlayer();
+    tocarKick(vendo.video);
+  } else {
+    tocarKick(null);
+    if (vendo) tocarLive(vendo.video);
+    else fecharPlayer();
+  }
   posicionarPlayer();
   renderSomAssistir();
 }
@@ -4066,6 +4076,16 @@ async function tocarLive(video) {
     playerVars: { autoplay: 1, mute: videoSemSom() ? 1 : 0, rel: 0, playsinline: 1, origin: location.origin },
     events: { onReady: aplicarSomLive },
   });
+}
+
+// a Kick não tem controle por código: o player é um iframe, e mutar/desmutar recarrega ele
+function tocarKick(canal, forcar = false) {
+  if (canal === kickTocando && !forcar) return;
+  kickTocando = canal;
+  const f = $('#player-kick');
+  f.hidden = !canal;
+  $('#player-live-box').classList.toggle('kick', !!canal);
+  f.src = canal ? `https://player.kick.com/${canal}?autoplay=true&muted=${videoSemSom()}` : 'about:blank';
 }
 
 function fecharPlayer() {
@@ -4127,6 +4147,7 @@ function mudarMudoFixo(tipo, ligado) {
   salvarStorage('mudoFixo', mudoFixo);
   if (tipo === 'videos') {
     aplicarSomLive();
+    if (kickTocando) tocarKick(kickTocando, true);
     renderSomAssistir();
   } else {
     atualizarAudios();
