@@ -1,5 +1,12 @@
 [
   {
+    "versao": "1.0.21",
+    "itens": [
+      "Ao vivo aceita live da Kick também, com o player e o chat dela",
+      "Jogo em tela cheia (tipo Fortnite) não deve mais minimizar sozinho com o Concord aberto"
+    ]
+  },
+  {
     "versao": "1.0.20",
     "itens": [
       "Ao vivo: ícone novo no menu da esquerda. Cole o link de uma live do YouTube e todo mundo do servidor recebe o aviso",
