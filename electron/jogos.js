@@ -1,7 +1,7 @@
 // "Jogando X", igual o Discord: olha os programas abertos (com janela) e reconhece jogos.
 // Vale um jogo da lista abaixo ou qualquer coisa instalada na pasta de jogos da Steam, Epic, Riot, Xbox, GOG…
 import { app } from 'electron';
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 const INTERVALO = 15_000;
 
@@ -76,19 +76,61 @@ const PASTAS = [
 // lojas, launchers e ajudantes que ficam nessas pastas mas não são o jogo
 const IGNORAR = /launcher|crash|anticheat|easyanticheat|battleye|steamwebhelper|riot client|riotclient|bootstrap|setup|update|redist|helper|epic online services|overlay|^unins/i;
 
+// Um PowerShell só, aberto junto com o app, que responde uma linha de JSON a cada linha recebida.
+// Abrir um powershell.exe novo a cada verificação tirava jogo em tela cheia (Fortnite) do foco e ele minimizava.
+const SCRIPT = '[Console]::OutputEncoding = [Text.Encoding]::UTF8; '
+  + 'while ($null -ne [Console]::In.ReadLine()) { '
+  + 'ConvertTo-Json -Compress -InputObject @(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path } | '
+  + 'ForEach-Object { [pscustomobject]@{ n = $_.ProcessName; p = $_.Path; t = $_.MainWindowTitle } }); '
+  + '[Console]::Out.Flush() }';
+
+let ps = null;
+let esperando = null; // resolve da pergunta em andamento
+let buffer = '';
+
+function abrirPowershell() {
+  ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', SCRIPT], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+  ps.stdout.setEncoding('utf8');
+  ps.stdout.on('data', (parte) => {
+    buffer += parte;
+    const fim = buffer.indexOf('\n');
+    if (fim < 0) return;
+    const linha = buffer.slice(0, fim);
+    buffer = buffer.slice(fim + 1);
+    let lista = [];
+    try {
+      const v = JSON.parse(linha);
+      lista = Array.isArray(v) ? v : [v];
+    } catch {}
+    esperando?.(lista);
+    esperando = null;
+  });
+  const morreu = () => {
+    ps = null;
+    buffer = '';
+    esperando?.([]);
+    esperando = null;
+  };
+  ps.on('exit', morreu);
+  ps.on('error', morreu);
+  ps.stdin.on('error', () => {});
+}
+
 function listarJanelas() {
-  const comando = 'Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path } | '
-    + 'ForEach-Object { [pscustomobject]@{ n = $_.ProcessName; p = $_.Path; t = $_.MainWindowTitle } } | ConvertTo-Json -Compress';
+  if (esperando) return Promise.resolve([]);
+  if (!ps) abrirPowershell();
   return new Promise((resolve) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', comando], { windowsHide: true, timeout: 10_000, maxBuffer: 4 << 20 }, (err, saida) => {
-      if (err) return resolve([]);
-      try {
-        const lista = JSON.parse(saida || '[]');
-        resolve(Array.isArray(lista) ? lista : [lista]);
-      } catch {
-        resolve([]);
-      }
-    });
+    const timer = setTimeout(() => {
+      // travou: mata e abre outro na próxima
+      esperando = null;
+      ps?.kill();
+      resolve([]);
+    }, 10_000);
+    esperando = (lista) => {
+      clearTimeout(timer);
+      resolve(lista);
+    };
+    ps.stdin.write('\n');
   });
 }
 
