@@ -1,5 +1,12 @@
 [
   {
+    "versao": "1.0.22",
+    "itens": [
+      "Microfone bloqueado pelo Windows: o Concord agora percebe e abre a tela certa das Configurações pra liberar",
+      "No navegador, o aviso de microfone bloqueado explica onde liberar (no cadeado ao lado do endereço)"
+    ]
+  },
+  {
     "versao": "1.0.21",
     "itens": [
       "Ao vivo aceita live da Kick também, com o player e o chat dela",
