@@ -2448,7 +2448,7 @@ async function entrarVoz(canal) {
     estado.mic = await pegarMic();
   } catch (e) {
     estado.mic = null;
-    avisar(`Você entrou só ouvindo. ${explicarErroMic(e)}`, 15000);
+    avisar(`Você entrou só ouvindo. ${await explicarErroMic(e)}`, 15000);
   }
   aplicarMudo();
   if (estado.mic) monitorarFala(estado.eu.id, estado.mic);
@@ -4774,11 +4774,19 @@ $('#cfg-ruido').onchange = (e) => {
 
 // ---------- testar microfone (Configurações → Voz e vídeo) ----------
 // Erro do getUserMedia em português, dizendo o que fazer
-function explicarErroMic(e) {
+const MIC_WINDOWS = 'O Windows está bloqueando o microfone. Abri a tela certa: ligue "Acesso ao microfone" e "Permitir que aplicativos da área de trabalho acessem o microfone". Depois feche o Concord pela bandeja (botão direito → Sair) e abra de novo.';
+async function explicarErroMic(e) {
+  // no app, o Chromium não bloqueia nada: se o Windows bloqueou, o erro pode vir como
+  // NotAllowedError ou NotReadableError, então pergunta direto pro Windows
+  if (window.desktop?.micWindows && (await window.desktop.micWindows().catch(() => null)) === 'denied') {
+    window.desktop.privacidadeMic?.();
+    return MIC_WINDOWS;
+  }
   switch (e?.name) {
     case 'NotAllowedError':
     case 'SecurityError':
-      return 'O microfone está bloqueado. No Windows: Configurações → Privacidade e segurança → Microfone → ligue "Acesso ao microfone" e "Permitir que aplicativos da área de trabalho acessem o microfone". Depois feche o Concord pela bandeja (botão direito → Sair) e abra de novo.';
+      if (!VERSAO_APP) return 'O navegador bloqueou o microfone. Clique no cadeado ao lado do endereço → Microfone → Permitir, e recarregue a página.';
+      return MIC_WINDOWS.replace('Abri a tela certa', 'Em Configurações → Privacidade e segurança → Microfone');
     case 'NotFoundError':
     case 'OverconstrainedError':
       return 'Nenhum microfone encontrado. Confira se ele está conectado e escolha ele em "Dispositivo de entrada".';
@@ -4813,7 +4821,7 @@ async function testarMic() {
     stream = await pegarMic();
   } catch (e) {
     status.className = 'erro';
-    status.textContent = explicarErroMic(e);
+    status.textContent = await explicarErroMic(e);
     return;
   }
   const ctx = new AudioContext();

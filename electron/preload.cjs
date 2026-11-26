@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('desktop', {
   aoJogo: (cb) => ipcRenderer.on('desktop:jogo', (_e, jogo) => cb(jogo)),
   // traz a janela de volta da bandeja (ex.: clicou numa notificação)
   mostrar: () => ipcRenderer.invoke('desktop:mostrar'),
+  // microfone bloqueado pelo Windows: status ('denied' = bloqueado) e abrir a tela de privacidade
+  micWindows: () => ipcRenderer.invoke('desktop:mic-windows'),
+  privacidadeMic: () => ipcRenderer.invoke('desktop:privacidade-mic'),
   // clipes: id da tela principal pra gravar (getUserMedia com chromeMediaSource 'desktop')
   clipeFonte: () => ipcRenderer.invoke('desktop:clipe-fonte'),
 });

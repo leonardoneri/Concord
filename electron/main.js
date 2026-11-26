@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, desktopCapturer, globalShortcut, ipcMain, nativeImage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, desktopCapturer, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -232,6 +232,9 @@ function configurarPtt(code) {
 let jogos = { atual: () => null };
 ipcMain.handle('desktop:jogo', () => jogos.atual());
 ipcMain.handle('desktop:mostrar', () => mostrarJanela());
+// Microfone bloqueado pelo Windows (Privacidade → Microfone): 'denied', 'granted'...
+ipcMain.handle('desktop:mic-windows', () => systemPreferences.getMediaAccessStatus('microphone'));
+ipcMain.handle('desktop:privacidade-mic', () => shell.openExternal('ms-settings:privacy-microphone'));
 // Clipes: id da tela principal, pra página gravar sem abrir o seletor de tela
 ipcMain.handle('desktop:clipe-fonte', async (e) => {
   if (e.sender !== janela?.webContents) return null;
