@@ -271,6 +271,138 @@ async function tituloYoutube(id) {
   }
 }
 
+// ---------- player da call: YouTube (vídeo, live, playlist, busca) e Spotify ----------
+// Sem chave de API: lê os dados que as próprias páginas trazem. O Spotify não deixa tocar música inteira
+// fora do app dele, então (igual os bots do Discord) cada faixa vira a mesma música achada no YouTube.
+const MAX_FILA = 500;
+const CABECALHOS_WEB = {
+  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36',
+  'accept-language': 'pt-BR,pt;q=0.9,en;q=0.8',
+  cookie: 'SOCS=CAI; CONSENT=YES+1', // pula a tela de "aceitar cookies" do Google
+};
+async function paginaWeb(url) {
+  if (process.env.CONCORD_SEM_TITULOS) throw new Error('sem rede nos testes');
+  const r = await fetch(url, { headers: CABECALHOS_WEB, signal: AbortSignal.timeout(10000) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
+}
+function* andarJson(o) {
+  if (!o || typeof o !== 'object') return;
+  yield o;
+  for (const v of Object.values(o)) yield* andarJson(v);
+}
+const dadosYoutube = (html) => JSON.parse(/var ytInitialData = (\{.*?\});<\/script>/s.exec(html)?.[1] ?? 'null');
+// "3:34" / "1:02:03" -> segundos
+const segundos = (t) => (/^\d+(:\d+)*$/.test(t ?? '') ? t.split(':').reduce((s, n) => s * 60 + Number(n), 0) : null);
+
+// id da playlist de um link do YouTube (as "mix"/rádio, que começam com RD, não têm página)
+function playlistDoYoutube(texto) {
+  try {
+    const u = new URL(/^[a-z]+:\/\//i.test(texto) ? texto : `https://${texto}`);
+    if (!/(^|\.)youtube\.com$/.test(u.hostname)) return null;
+    const lista = u.searchParams.get('list');
+    return lista && /^[\w-]{10,64}$/.test(lista) && !lista.startsWith('RD') ? lista : null;
+  } catch {
+    return null;
+  }
+}
+async function playlistYoutube(id) {
+  const d = dadosYoutube(await paginaWeb(`https://www.youtube.com/playlist?list=${id}`));
+  if (!d) return null;
+  const itens = [];
+  for (const o of andarJson(d)) {
+    // formato novo (lockupViewModel) e o antigo (playlistVideoRenderer)
+    const l = o.lockupViewModel;
+    if (l?.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO' && /^[\w-]{11}$/.test(l.contentId)) {
+      const selo = [...andarJson(l.contentImage)].find((x) => x.thumbnailBadgeViewModel)?.thumbnailBadgeViewModel.text;
+      itens.push({ video: l.contentId, titulo: l.metadata?.lockupMetadataViewModel?.title?.content, duracao: segundos(selo) });
+    }
+    const v = o.playlistVideoRenderer;
+    if (v && /^[\w-]{11}$/.test(v.videoId)) itens.push({ video: v.videoId, titulo: v.title?.runs?.[0]?.text, duracao: Number(v.lengthSeconds) || null });
+  }
+  const titulo = [...andarJson(d)].find((o) => o.playlistMetadataRenderer)?.playlistMetadataRenderer.title;
+  return { titulo: textoLimpo(titulo, 100) || 'Playlist', itens };
+}
+// busca no YouTube: os primeiros vídeos (sem lives nem canais)
+async function buscarYoutube(busca, limite = 5) {
+  const d = dadosYoutube(await paginaWeb(`https://www.youtube.com/results?search_query=${encodeURIComponent(busca)}&sp=EgIQAQ%253D%253D`));
+  const achados = [];
+  for (const o of andarJson(d)) {
+    const v = o.videoRenderer;
+    if (!v || !/^[\w-]{11}$/.test(v.videoId) || !v.lengthText) continue;
+    achados.push({ video: v.videoId, titulo: v.title?.runs?.[0]?.text, duracao: segundos(v.lengthText.simpleText) });
+    if (achados.length >= limite) break;
+  }
+  return achados;
+}
+
+// open.spotify.com/(intl-pt/)track|album|playlist|artist/ID ou spotify:track:ID
+function linkDoSpotify(texto) {
+  const m = /^spotify:(track|album|playlist|artist):([A-Za-z0-9]{22})$/.exec(texto)
+    ?? /^(?:https?:\/\/)?open\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:embed\/)?(track|album|playlist|artist)\/([A-Za-z0-9]{22})/.exec(texto);
+  return m ? { tipo: m[1], id: m[2] } : null;
+}
+// a página de "embed" do Spotify traz o nome, os artistas e a lista de faixas (até 100) num JSON
+async function spotify({ tipo, id }) {
+  const html = await paginaWeb(`https://open.spotify.com/embed/${tipo}/${id}`);
+  const json = /<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s.exec(html)?.[1];
+  const e = json && JSON.parse(json).props?.pageProps?.state?.data?.entity;
+  if (!e) return null;
+  const faixas = tipo === 'track'
+    ? [{ titulo: e.name ?? e.title, artista: (e.artists ?? []).map((a) => a.name).join(', '), duracao: e.duration }]
+    : (e.trackList ?? []).map((f) => ({ titulo: f.title, artista: f.subtitle, duracao: f.duration }));
+  return {
+    titulo: textoLimpo(e.name ?? e.title, 100) || 'Spotify',
+    itens: faixas.filter((f) => f.titulo).map((f) => ({
+      titulo: textoLimpo(`${f.artista ? `${f.artista} - ` : ''}${f.titulo}`, 200),
+      duracao: f.duracao ? Math.round(f.duracao / 1000) : null,
+    })),
+  };
+}
+// faixa do Spotify -> vídeos do YouTube, o de duração mais parecida primeiro (os outros ficam de reserva,
+// pra quando o dono do vídeo não deixa tocar fora do YouTube)
+async function videosDaFaixa(item) {
+  const achados = await buscarYoutube(`${item.titulo} audio`);
+  if (item.duracao) achados.sort((a, b) => (Math.abs((a.duracao ?? 0) - item.duracao) > 15) - (Math.abs((b.duracao ?? 0) - item.duracao) > 15));
+  return achados.map((a) => a.video);
+}
+
+// texto colado no player -> { titulo, itens: [{ video?, titulo, duracao, origem }] }
+async function itensDoPlayer(texto) {
+  texto = String(texto ?? '').trim().slice(0, 500);
+  if (!texto) return { erro: 'Cole um link ou escreva o nome da música' };
+  try {
+    const sp = linkDoSpotify(texto);
+    if (sp) {
+      const r = await spotify(sp);
+      if (!r?.itens.length) return { erro: 'Não consegui abrir esse link do Spotify (é público?)' };
+      return { titulo: r.titulo, itens: r.itens.map((i) => ({ ...i, origem: 'spotify' })) };
+    }
+    const lista = playlistDoYoutube(texto);
+    if (lista) {
+      const r = await playlistYoutube(lista);
+      if (!r?.itens.length) return { erro: 'Não consegui abrir essa playlist (é pública?)' };
+      // link de um vídeo dentro da playlist: começa por ele
+      const comeco = Math.max(0, r.itens.findIndex((i) => i.video === idDoYoutube(texto)));
+      return { titulo: r.titulo, itens: r.itens.slice(comeco).map((i) => ({ ...i, titulo: textoLimpo(i.titulo, 200) || 'Vídeo', origem: 'youtube' })) };
+    }
+    const video = linkDaLive(texto)?.plataforma === 'youtube' ? linkDaLive(texto).video : null;
+    if (video) {
+      const titulo = (await tituloYoutube(video)) ?? 'Vídeo do YouTube';
+      return { titulo, itens: [{ video, titulo, duracao: null, origem: 'youtube' }] };
+    }
+    if (/^(https?:\/\/|www\.)/i.test(texto)) return { erro: 'Só dá pra pôr link do YouTube ou do Spotify (ou escrever o nome da música)' };
+    // nome da música: o primeiro resultado do YouTube
+    const [achado] = await buscarYoutube(texto, 1);
+    if (!achado) return { erro: `Não achei nada pra "${texto}"` };
+    const titulo = textoLimpo(achado.titulo, 200) || texto;
+    return { titulo, itens: [{ ...achado, titulo, origem: 'youtube' }] };
+  } catch (err) {
+    console.error('player: link', err.message);
+    return { erro: 'Não consegui falar com o YouTube/Spotify agora. Tenta de novo daqui a pouco.' };
+  }
+}
+
 // ---------- prévia de links (título, descrição e imagem da página) ----------
 // O servidor é quem abre a página, então nunca pode ir pra rede interna (localhost, 10.x, 192.168.x…)
 const IPS_INTERNOS = new net.BlockList();
@@ -1065,6 +1197,64 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     return mapas.get(id);
   }
   const sala = (srv) => `s:${srv}`;
+
+  // player de cada call (só na memória: some quando a sala esvazia).
+  // Onde está: tocando ? pos + (agora - desde) : pos, em segundos
+  const players = new Map(); // canal de voz -> { fila, atual, tocando, pos, desde, ultimoId }
+  const playerDe = (canal) => {
+    if (!players.has(canal)) players.set(canal, { fila: [], atual: -1, tocando: false, pos: 0, desde: Date.now(), ultimoId: 0 });
+    return players.get(canal);
+  };
+  const posicaoPlayer = (p) => p.pos + (p.tocando ? (Date.now() - p.desde) / 1000 : 0);
+  const fimDaFila = (p) => p.atual >= p.fila.length;
+  function estadoPlayer(canal) {
+    const p = players.get(canal);
+    if (!p) return { fila: [], atual: -1, tocando: false, pos: 0, agora: Date.now() };
+    return {
+      fila: p.fila.map(({ id, video, titulo, duracao, origem, por }) => ({ id, video, titulo, duracao, origem, por })),
+      atual: p.atual, tocando: p.tocando, pos: posicaoPlayer(p), agora: Date.now(),
+    };
+  }
+  function emitirPlayer(canal) {
+    const e = estadoPlayer(canal);
+    for (const o of usuarios.values()) if (o.voz === canal) io.to(o.socket).emit('player', e);
+  }
+  // faixa do Spotify ainda sem vídeo: acha no YouTube (uma vez só por faixa)
+  function resolverItem(item) {
+    if (item.video || item.falhou) return Promise.resolve();
+    item.resolvendo ??= videosDaFaixa(item).then(([video, ...reservas] = []) => {
+      if (video) Object.assign(item, { video, reservas });
+      else item.falhou = true;
+    }).catch((err) => {
+      console.error('player: busca', err.message);
+      item.resolvendo = null; // tenta de novo na próxima vez
+    });
+    return item.resolvendo;
+  }
+  // já vai achando as próximas, pra não ter pausa entre uma música e outra
+  function prepararProximas(canal) {
+    const p = players.get(canal);
+    p?.fila.slice(p.atual + 1, p.atual + 3).forEach(resolverItem);
+  }
+  // toca a música i da fila (pula as que não achou no YouTube); passou do fim = a fila acabou
+  async function irPara(canal, i) {
+    const p = players.get(canal);
+    if (!p) return;
+    for (; i < p.fila.length; i++) {
+      const item = p.fila[i];
+      Object.assign(p, { atual: i, pos: 0, desde: Date.now(), tocando: true });
+      await resolverItem(item);
+      if (p.fila[p.atual] !== item) return; // mudaram enquanto eu buscava
+      if (item.video) break;
+    }
+    if (i >= p.fila.length) Object.assign(p, { atual: p.fila.length, pos: 0, tocando: false });
+    else Object.assign(p, { pos: 0, desde: Date.now() }); // conta do momento em que achou o vídeo
+    prepararProximas(canal);
+  }
+  // sala vazia: o player para e a fila some
+  setInterval(() => {
+    for (const canal of players.keys()) if (![...usuarios.values()].some((o) => o.voz === canal)) players.delete(canal);
+  }, 60_000).unref();
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
   const publico = ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo, rede }) =>
@@ -2171,6 +2361,114 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
       sql.apagarLive.run(l.id);
       registrar(u.conta, 'live', `encerrou a live "${l.titulo}" em ${nomeServidor(l.servidor)}`);
       io.to(sala(l.servidor)).emit('live:mudou', { id: l.id, servidor: l.servidor, comecou: false });
+      ack({});
+    });
+
+    // ---------- player da call: todo mundo da sala ouve/vê a mesma coisa, no mesmo ponto ----------
+    // Qualquer um da call põe, pausa, pula, volta ou arrasta; o servidor guarda onde está e avisa todo mundo.
+    quando('player:estado', (u, _, ack) => ack(u.voz != null ? estadoPlayer(u.voz) : null));
+
+    // { texto: link do YouTube/Spotify ou nome da música, agora: tocar já em vez de pôr no fim da fila }
+    quando('player:adicionar', async (u, { texto, agora } = {}, ack) => {
+      const canal = u.voz;
+      if (canal == null) return ack({ erro: 'Entra numa sala de voz primeiro' });
+      const r = await itensDoPlayer(texto);
+      if (r.erro) return ack(r);
+      if (u.voz !== canal) return ack({ erro: 'Você saiu da call' });
+      const p = playerDe(canal);
+      const cabem = MAX_FILA - p.fila.length;
+      if (cabem <= 0) return ack({ erro: `A fila já tem ${MAX_FILA} músicas. Limpa um pouco antes.` });
+      const novos = r.itens.slice(0, cabem).map((i) => ({
+        id: ++p.ultimoId, video: i.video ?? null, reservas: [], titulo: i.titulo, duracao: i.duracao ?? null, origem: i.origem, por: u.nome,
+      }));
+      const parado = p.atual < 0 || fimDaFila(p);
+      // "tocar agora": entra logo depois da atual e já pula pra ela
+      const onde = agora && !parado ? p.atual + 1 : p.fila.length;
+      p.fila.splice(onde, 0, ...novos);
+      for (const o of usuarios.values()) {
+        if (o.voz === canal && o.id !== u.id) io.to(o.socket).emit('player:aviso', `${u.nome} pôs ${novos.length > 1 ? `${novos.length} músicas (${r.titulo})` : r.titulo}`);
+      }
+      if (parado || agora) await irPara(canal, onde);
+      else prepararProximas(canal);
+      emitirPlayer(canal);
+      ack({ titulo: r.titulo, n: novos.length, cortou: r.itens.length > novos.length });
+    });
+
+    // { tipo: 'tocar' | 'pausar' | 'pular' | 'voltar' | 'ir' | 'buscar' | 'remover' | 'limpar' | 'embaralhar', item, pos }
+    quando('player:acao', async (u, { tipo, item, pos } = {}, ack) => {
+      const canal = u.voz;
+      const p = canal != null && players.get(canal);
+      if (!p) return ack({ erro: 'Não tem nada tocando' });
+      const atual = p.fila[p.atual];
+      if (tipo === 'tocar') {
+        // a fila acabou: recomeça do início
+        if (fimDaFila(p)) {
+          if (!p.fila.length) return ack({});
+          await irPara(canal, 0);
+        }
+        if (!p.tocando) Object.assign(p, { tocando: true, desde: Date.now() });
+      } else if (tipo === 'pausar') {
+        if (p.tocando) Object.assign(p, { tocando: false, pos: posicaoPlayer(p) });
+      } else if (tipo === 'pular') {
+        await irPara(canal, p.atual + 1);
+      } else if (tipo === 'voltar') {
+        // no começo da música volta pra anterior; depois de uns segundos, recomeça a mesma
+        await irPara(canal, posicaoPlayer(p) > 5 || p.atual === 0 ? p.atual : p.atual - 1);
+      } else if (tipo === 'ir') {
+        const i = p.fila.findIndex((x) => x.id === Number(item));
+        if (i < 0) return ack({ erro: 'Essa música saiu da fila' });
+        await irPara(canal, i);
+      } else if (tipo === 'buscar') {
+        pos = Number(pos);
+        if (!atual || !Number.isFinite(pos) || pos < 0) return ack({});
+        Object.assign(p, { pos, desde: Date.now() });
+      } else if (tipo === 'remover') {
+        const i = p.fila.findIndex((x) => x.id === Number(item));
+        if (i < 0) return ack({});
+        p.fila.splice(i, 1);
+        if (i < p.atual) p.atual--;
+        else if (i === p.atual) await irPara(canal, p.atual);
+      } else if (tipo === 'limpar') {
+        // tira tudo menos a que está tocando
+        p.fila = atual ? [atual] : [];
+        p.atual = atual ? 0 : -1;
+      } else if (tipo === 'embaralhar') {
+        const resto = p.fila.splice(p.atual + 1);
+        for (let i = resto.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [resto[i], resto[j]] = [resto[j], resto[i]];
+        }
+        p.fila.push(...resto);
+        prepararProximas(canal);
+      } else {
+        return ack({ erro: 'Ação desconhecida' });
+      }
+      emitirPlayer(canal);
+      ack({});
+    });
+
+    // o vídeo acabou no player de alguém: vai pra próxima (só conta o primeiro aviso de cada música)
+    quando('player:fim', async (u, item, ack) => {
+      const p = u.voz != null && players.get(u.voz);
+      const atual = p?.fila[p.atual];
+      if (!atual || atual.id !== Number(item) || !p.tocando || posicaoPlayer(p) < 3) return ack({});
+      await irPara(u.voz, p.atual + 1);
+      emitirPlayer(u.voz);
+      ack({});
+    });
+    // o YouTube não deixou tocar esse vídeo aqui (bloqueado fora do site, privado…): tenta a reserva ou pula
+    quando('player:erro', async (u, { item, video } = {}, ack) => {
+      const p = u.voz != null && players.get(u.voz);
+      const atual = p?.fila[p.atual];
+      if (!atual || atual.id !== Number(item) || atual.video !== video) return ack({});
+      if (atual.reservas.length) {
+        atual.video = atual.reservas.shift();
+        Object.assign(p, { pos: 0, desde: Date.now() });
+      } else {
+        for (const o of usuarios.values()) if (o.voz === u.voz) io.to(o.socket).emit('player:aviso', `"${atual.titulo}" não deixa tocar fora do YouTube: pulei`);
+        await irPara(u.voz, p.atual + 1);
+      }
+      emitirPlayer(u.voz);
       ack({});
     });
 

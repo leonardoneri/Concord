@@ -192,6 +192,46 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   ok('página da Kick que não é canal é recusada', !!(await emit(leo, 'live:iniciar', { servidor: srv1, link: 'https://kick.com/categories' })).erro);
   await emit(leo, 'live:encerrar', live3);
   ok('quem pôs encerra a sua', !(await emit(leo, 'live:encerrar', live2)).erro && (await emit(ana, 'live:lista')).length === 0);
+  // player da call: a mesma música pra todo mundo da sala
+  ok('fora da call não põe música', !!(await emit(bia, 'player:adicionar', { texto: 'youtu.be/aaaaaaaaaaa' })).erro);
+  ok('link de outro site é recusado', !!(await emit(leo, 'player:adicionar', { texto: 'https://example.com/x' })).erro);
+  let tocou = proximo(ana, 'player');
+  const avisou = proximo(ana, 'player:aviso');
+  ok('põe um vídeo', (await emit(leo, 'player:adicionar', { texto: 'https://www.youtube.com/watch?v=aaaaaaaaaaa' })).n === 1);
+  let pl = await tocou;
+  ok('a sala toda recebe e já começa a tocar', pl?.fila.length === 1 && pl.atual === 0 && pl.tocando && pl.fila[0].video === 'aaaaaaaaaaa' && pl.fila[0].por === 'Leo');
+  ok('os outros recebem o aviso', /Leo pôs/.test(await avisou));
+  await emit(ana, 'player:adicionar', { texto: 'youtu.be/bbbbbbbbbbb' });
+  pl = await emit(ana, 'player:estado');
+  ok('o segundo entra na fila sem cortar o primeiro', pl.fila.length === 2 && pl.atual === 0);
+  tocou = proximo(leo, 'player');
+  await emit(ana, 'player:acao', { tipo: 'pausar' });
+  ok('qualquer um pausa pra todo mundo', (await tocou)?.tocando === false);
+  await emit(ana, 'player:acao', { tipo: 'buscar', pos: 42 });
+  ok('arrastar muda o ponto pra todos', Math.round((await emit(leo, 'player:estado')).pos) === 42);
+  ok('fim cedo demais (pausado) não pula', !(await emit(leo, 'player:fim', pl.fila[0].id)).erro && (await emit(leo, 'player:estado')).atual === 0);
+  await emit(leo, 'player:acao', { tipo: 'pular' });
+  pl = await emit(leo, 'player:estado');
+  ok('pular vai pra próxima e volta a tocar', pl.atual === 1 && pl.tocando && pl.pos < 1);
+  await emit(leo, 'player:acao', { tipo: 'voltar' });
+  ok('voltar no começo vai pra anterior', (await emit(leo, 'player:estado')).atual === 0);
+  await emit(leo, 'player:adicionar', { texto: 'youtu.be/ccccccccccc', agora: true });
+  pl = await emit(leo, 'player:estado');
+  ok('"tocar agora" entra logo depois e já toca', pl.atual === 1 && pl.fila[1].video === 'ccccccccccc' && pl.fila.length === 3);
+  await emit(leo, 'player:erro', { item: pl.fila[1].id, video: 'ccccccccccc' });
+  ok('vídeo bloqueado sem reserva: pula', (await emit(leo, 'player:estado')).atual === 2);
+  await emit(ana, 'player:acao', { tipo: 'remover', item: pl.fila[0].id });
+  pl = await emit(leo, 'player:estado');
+  ok('remover uma de antes não muda a que toca', pl.fila.length === 2 && pl.fila[pl.atual].video === 'bbbbbbbbbbb');
+  await emit(leo, 'player:acao', { tipo: 'pular' });
+  pl = await emit(leo, 'player:estado');
+  ok('passou da última: a fila acaba', pl.atual === 2 && !pl.tocando);
+  await emit(leo, 'player:acao', { tipo: 'tocar' });
+  ok('tocar depois do fim recomeça a fila', (await emit(leo, 'player:estado')).atual === 0);
+  await emit(leo, 'player:acao', { tipo: 'limpar' });
+  ok('limpar deixa só a que está tocando', (await emit(leo, 'player:estado')).fila.length === 1);
+  ok('quem é de outra sala não mexe', !!(await emit(bia, 'player:acao', { tipo: 'pausar' })).erro);
+
   // mapa da chamada (cada sala de voz pode ter o seu)
   ok('sala sem mapa não tem mapa', (await emit(leo, 'mapa:estado')) === null);
   const linhas = (c) => Array.from({ length: 8 }, () => c.repeat(10));
