@@ -61,6 +61,7 @@
     "npmRebuild": false
   },
   "optionalDependencies": {
+    "loopback-capture": "^5.0.0",
     "uiohook-napi": "^1.5.5"
   }
 }

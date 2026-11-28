@@ -2,6 +2,8 @@ import { app, BrowserWindow, Menu, Tray, desktopCapturer, globalShortcut, ipcMai
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
+import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { iniciarAtualizador } from './atualizador.js';
 import { vigiarJogos } from './jogos.js';
@@ -152,11 +154,70 @@ function escolherFonte(fontes) {
           tela: f.id.startsWith('screen:'),
         })),
         audioDisponivel: process.platform === 'win32',
+        somPorJanela: somPorJanela(),
       });
     });
     seletor.loadFile(path.join(dir, 'seletor.html'));
   });
 }
+
+// ---------- som só da janela compartilhada ----------
+// O Chromium só sabe pegar o som do PC inteiro. Pra uma janela, o addon pega o som do processo dela
+// (e dos filhos: o som do Chrome sai de um processo filho) e manda o PCM pra página, que vira a trilha de áudio.
+// Precisa do Windows 10 build 20348+ (Windows 11); senão fica o som do PC todo, como antes.
+let loopback = null;
+function carregarLoopback() {
+  if (loopback === null) {
+    try {
+      loopback = createRequire(import.meta.url)('loopback-capture');
+    } catch (err) {
+      console.error('Sem captura de som por janela', err);
+      loopback = false;
+    }
+  }
+  return loopback;
+}
+const somPorJanela = () => process.platform === 'win32' && Number(os.release().split('.')[2]) >= 20348 && !!carregarLoopback();
+
+// janela escolhida -> processo dela (o id do desktopCapturer é "window:<HWND>:0")
+function processoDaJanela(id) {
+  const hwnd = Number(id.split(':')[1]);
+  if (!hwnd) return Promise.resolve(null);
+  const ps = `Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);'; $p = 0; [void][W.U]::GetWindowThreadProcessId([IntPtr]${hwnd}, [ref]$p); $p`;
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 10000 }, (err, saida) => {
+      const pid = Number(String(saida).trim());
+      resolve(!err && pid > 0 && pid !== process.pid ? pid : null);
+    });
+  });
+}
+
+let pidDoSom = null; // processo da janela que a página vai pedir pra ouvir (escolhida agora no seletor)
+let captura = null;
+function pararSomDaJanela() {
+  try { captura?.stop(); } catch {}
+  captura = null;
+}
+// a página pegou a tela: começa a mandar o som da janela ({ taxa, canais } ou null se não tem)
+ipcMain.handle('desktop:som-janela', (e) => {
+  if (e.sender !== janela?.webContents) return null;
+  const pid = pidDoSom;
+  pidDoSom = null;
+  pararSomDaJanela();
+  if (!pid) return null;
+  try {
+    captura = new (carregarLoopback().LoopbackCapture)();
+    captura.start(pid, (pedaco) => janela?.webContents.send('desktop:som-janela', pedaco));
+  } catch (err) {
+    console.error('Não consegui pegar o som da janela', err);
+    captura = null;
+    return null;
+  }
+  return { taxa: 48000, canais: 2 };
+});
+ipcMain.handle('desktop:parar-som-janela', (e) => {
+  if (e.sender === janela?.webContents) pararSomDaJanela();
+});
 
 // ---------- IPC ----------
 // Hook de teclado/mouse do sistema: vê a tecla do "apertar pra falar" até com o jogo em foco.
@@ -285,7 +346,13 @@ app.whenReady().then(() => {
       const escolha = await escolherFonte(fontes);
       const fonte = escolha && fontes.find((f) => f.id === escolha.id);
       if (!fonte) return callback({});
-      // áudio do PC todo, menos o do próprio Concord: senão a voz da galera na chamada
+      pidDoSom = null;
+      // uma janela: só o som dela (a página pede com desktop:som-janela)
+      if (escolha.audio && !fonte.id.startsWith('screen:') && somPorJanela()) {
+        pidDoSom = await processoDaJanela(fonte.id);
+        if (pidDoSom) return callback({ video: fonte });
+      }
+      // tela inteira: áudio do PC todo, menos o do próprio Concord: senão a voz da galera na chamada
       // vai junto na transmissão e todo mundo se ouve de volta (o Discord faz igual)
       callback(escolha.audio && process.platform === 'win32' ? { video: fonte, audio: 'loopbackWithoutChrome' } : { video: fonte });
     } catch (err) {
@@ -310,6 +377,7 @@ app.whenReady().then(() => {
 app.on('second-instance', () => mostrarJanela());
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  pararSomDaJanela();
   configurarPtt(null);
 });
 app.on('window-all-closed', () => app.quit());

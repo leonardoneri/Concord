@@ -19,4 +19,11 @@ contextBridge.exposeInMainWorld('desktop', {
   privacidadeMic: () => ipcRenderer.invoke('desktop:privacidade-mic'),
   // clipes: id da tela principal pra gravar (getUserMedia com chromeMediaSource 'desktop')
   clipeFonte: () => ipcRenderer.invoke('desktop:clipe-fonte'),
+  // som só da janela compartilhada: liga ({ taxa, canais } ou null), recebe os pedaços de PCM (16 bits) e desliga
+  somJanela: () => ipcRenderer.invoke('desktop:som-janela'),
+  aoSomJanela: (cb) => {
+    ipcRenderer.removeAllListeners('desktop:som-janela');
+    ipcRenderer.on('desktop:som-janela', (_e, pedaco) => cb(pedaco));
+  },
+  pararSomJanela: () => ipcRenderer.invoke('desktop:parar-som-janela'),
 });

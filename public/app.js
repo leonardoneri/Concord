@@ -2731,6 +2731,11 @@ async function alternarTela() {
     } catch {
       return; // cancelou a escolha
     }
+    // escolheu uma janela com som: o app manda só o som dela (o resto do PC fica de fora)
+    if (!estado.tela.getAudioTracks().length) {
+      const trilha = await somDaJanela();
+      if (trilha) estado.tela.addTrack(trilha);
+    }
     // garante a qualidade escolhida mesmo se o seletor ignorar as restrições
     estado.tela.getVideoTracks()[0].applyConstraints(restricoesTela()).catch(() => {});
     // clicou em "Parar de compartilhar" fora do app
@@ -2750,9 +2755,78 @@ async function alternarTela() {
   render();
 }
 
+// PCM de 16 bits que chega do app -> trilha de áudio. Uma fila curta (no máx. ~0,3 s) segura as variações de chegada.
+const WORKLET_SOM_JANELA = `registerProcessor('som-janela', class extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.fila = [];
+    this.pos = 0;
+    this.port.onmessage = (e) => {
+      this.fila.push(e.data);
+      let total = this.fila.reduce((n, p) => n + p.length, 0) - this.pos;
+      while (total > sampleRate * 2 * 0.3 && this.fila.length > 1) {
+        total -= this.fila[0].length - this.pos;
+        this.fila.shift();
+        this.pos = 0;
+      }
+    };
+  }
+  process(_, [saida]) {
+    const [esq, dir] = saida;
+    for (let i = 0; i < esq.length; i++) {
+      const p = this.fila[0];
+      if (!p) break;
+      esq[i] = p[this.pos] / 32768;
+      if (dir) dir[i] = p[this.pos + 1] / 32768;
+      this.pos += 2;
+      if (this.pos >= p.length) {
+        this.fila.shift();
+        this.pos = 0;
+      }
+    }
+    return true;
+  }
+});`;
+let somJanela = null; // { ctx } enquanto mando o som de uma janela
+async function somDaJanela() {
+  if (!appDesktop?.somJanela) return null;
+  const info = await appDesktop.somJanela().catch(() => null);
+  if (!info) return null;
+  try {
+    const ctx = new AudioContext({ sampleRate: info.taxa });
+    const url = URL.createObjectURL(new Blob([WORKLET_SOM_JANELA], { type: 'text/javascript' }));
+    await ctx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    const no = new AudioWorkletNode(ctx, 'som-janela', { numberOfInputs: 0, outputChannelCount: [info.canais] });
+    const destino = ctx.createMediaStreamDestination();
+    no.connect(destino);
+    ctx.resume().catch(() => {});
+    appDesktop.aoSomJanela((pedaco) => {
+      // o pedaço pode começar num byte ímpar do buffer: copia pra um Int16Array alinhado
+      const amostras = new Int16Array(pedaco.byteLength >> 1);
+      new Uint8Array(amostras.buffer).set(new Uint8Array(pedaco.buffer, pedaco.byteOffset, amostras.length * 2));
+      no.port.postMessage(amostras, [amostras.buffer]);
+    });
+    somJanela = { ctx };
+    return destino.stream.getAudioTracks()[0];
+  } catch (e) {
+    console.error('som da janela', e);
+    appDesktop.pararSomJanela();
+    return null;
+  }
+}
+function pararSomDaJanela() {
+  if (!somJanela) return;
+  appDesktop.pararSomJanela();
+  appDesktop.aoSomJanela(() => {});
+  somJanela.ctx.close().catch(() => {});
+  somJanela = null;
+}
+
 function pararStream(tipo) {
   const s = estado[tipo];
   if (!s) return;
+  if (tipo === 'tela') pararSomDaJanela();
   s.getTracks().forEach((t) => t.stop());
   for (const p of peers.values()) {
     for (const sender of p.senders[tipo]) {

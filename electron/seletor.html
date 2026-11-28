@@ -86,7 +86,7 @@
   <footer>
     <label id="label-audio" hidden>
       <input type="checkbox" id="audio">
-      <span>Incluir som do PC <small>(a galera pode ouvir o eco da própria voz)</small></span>
+      <span id="texto-audio">Incluir som do PC</span>
     </label>
     <span style="flex:1" id="espaco"></span>
     <button class="cancelar" id="cancelar">Cancelar</button>
@@ -99,7 +99,10 @@
     let aba = 'janelas';
     let escolhida = null;
 
+    let somPorJanela = false;
     function render() {
+      // janela: só o som dela; tela inteira: o PC todo (menos o Concord)
+      $('#texto-audio').textContent = aba === 'janelas' && somPorJanela ? 'Incluir o som do aplicativo' : 'Incluir som do PC';
       const lista = fontes.filter((f) => (aba === 'telas') === f.tela);
       $('#grade').replaceChildren(...lista.map((f) => {
         const card = document.createElement('div');
@@ -141,6 +144,7 @@
 
     window.seletor.aoReceber((dados) => {
       fontes = dados.fontes;
+      somPorJanela = !!dados.somPorJanela;
       $('#label-audio').hidden = !dados.audioDisponivel;
       $('#espaco').hidden = dados.audioDisponivel;
       if (!fontes.some((f) => !f.tela)) aba = 'telas';
