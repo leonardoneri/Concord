@@ -4297,6 +4297,7 @@ const fmtTempo = (s) => {
   const ss = String(s % 60).padStart(2, '0');
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 };
+const videoNoPlayer = () => (ytCallPronto ? ytCall.getVideoData?.()?.video_id : null) ?? ytCallVideo;
 // live do YouTube: não tem "segundo" pra sincronizar, só tocar/pausar
 const ehLiveCall = () => !!ytCallPronto && (ytCall.getVideoData?.()?.isLive || ytCall.getDuration?.() === 0);
 
@@ -4342,14 +4343,15 @@ async function seguirPlayer() {
         },
         onStateChange: (ev) => {
           const it = itemTocando();
-          if (ev.data === YT.PlayerState.ENDED && it) socket.emit('player:fim', it.id);
+          // só vale se quem acabou é o vídeo da música atual (não um anterior que terminou atrasado)
+          if (ev.data === YT.PlayerState.ENDED && it && videoNoPlayer() === it.video) socket.emit('player:fim', it.id);
           if (ev.data === YT.PlayerState.PLAYING || ev.data === YT.PlayerState.PAUSED) corrigirPlayer();
           renderPlayer();
         },
         // 2 = id errado, 5 = erro do player, 100 = não existe/privado, 101/150 = o dono não deixa tocar fora do YouTube
         onError: (ev) => {
           const it = itemTocando();
-          if (it && [2, 5, 100, 101, 150].includes(ev.data)) socket.emit('player:erro', { item: it.id, video: it.video });
+          if (it && [2, 5, 100, 101, 150].includes(ev.data) && videoNoPlayer() === it.video) socket.emit('player:erro', { item: it.id, video: it.video });
         },
       },
     });
