@@ -1,5 +1,15 @@
 [
   {
+    "versao": "1.0.23",
+    "itens": [
+      "Player da call: botão novo na chamada. Cole um vídeo, live ou playlist do YouTube, uma música, álbum ou playlist do Spotify, ou só o nome da música",
+      "Todo mundo da call ouve junto: se alguém pausa, pula, volta ou arrasta, muda pra todo mundo. O volume é só seu",
+      "Fila com \"Tocar agora\", embaralhar e tirar música; fechando o painel a música continua",
+      "Se todo mundo sair da call, o player pausa e espera 3 minutos antes de desligar",
+      "Compartilhar uma janela com som agora manda só o som daquele programa, não o do PC todo (Windows 11)"
+    ]
+  },
+  {
     "versao": "1.0.22",
     "itens": [
       "Microfone bloqueado pelo Windows: o Concord agora percebe e abre a tela certa das Configurações pra liberar",
