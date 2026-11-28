@@ -1251,16 +1251,33 @@ export function iniciarServidor({ porta = 3000, senha = '', pastaDados = path.jo
     else Object.assign(p, { pos: 0, desde: Date.now() }); // conta do momento em que achou o vídeo
     prepararProximas(canal);
   }
-  // sala vazia: o player para e a fila some
-  setInterval(() => {
-    for (const canal of players.keys()) if (![...usuarios.values()].some((o) => o.voz === canal)) players.delete(canal);
-  }, 60_000).unref();
+  // Todo mundo saiu da call: o player pausa onde estava. Se alguém voltar em até 3 min, continua de onde parou;
+  // depois disso desliga e a fila some. Roda a cada mudança de presença (entrou/saiu da call).
+  const PLAYER_VAZIO_MS = 3 * 60_000;
+  function conferirPlayers() {
+    for (const [canal, p] of players) {
+      const temGente = [...usuarios.values()].some((o) => o.voz === canal);
+      if (!temGente && p.vazioDesde == null) {
+        p.vazioDesde = Date.now();
+        p.retomar = p.tocando;
+        if (p.tocando) Object.assign(p, { tocando: false, pos: posicaoPlayer(p) });
+      } else if (temGente && p.vazioDesde != null) {
+        p.vazioDesde = null;
+        if (p.retomar) Object.assign(p, { tocando: true, desde: Date.now() });
+        emitirPlayer(canal);
+      } else if (!temGente && Date.now() - p.vazioDesde >= PLAYER_VAZIO_MS) {
+        players.delete(canal);
+      }
+    }
+  }
+  setInterval(conferirPlayers, 15_000).unref();
 
   // Cada um vê quem é do servidor aberto + quem está na mesma call (que pode ser de outro servidor)
   const publico = ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo, rede }) =>
     ({ id, conta, nome, cor, voz, mudo, surdo, mic, camera, tela, status, statusTexto, jogo, rede });
   // eu.servidor = id do servidor aberto, ou 'dm' vendo as conversas diretas
   function emitirPresenca() {
+    conferirPlayers();
     const membrosDe = new Map();
     const membrosDoServidor = (srv) => {
       if (!membrosDe.has(srv)) membrosDe.set(srv, new Set(sql.contasMembros.all(srv).map((m) => m.conta)));

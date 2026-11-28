@@ -231,6 +231,15 @@ ok('volta com convite', (await emit(ana, 'servidor:entrar', { convite })).id ===
   await emit(leo, 'player:acao', { tipo: 'limpar' });
   ok('limpar deixa só a que está tocando', (await emit(leo, 'player:estado')).fila.length === 1);
   ok('quem é de outra sala não mexe', !!(await emit(bia, 'player:acao', { tipo: 'pausar' })).erro);
+  // todo mundo saiu: pausa onde estava; voltando (antes de 3 min), continua
+  await emit(leo, 'player:acao', { tipo: 'buscar', pos: 30 });
+  leo.emit('voz:sair');
+  ana.emit('voz:sair');
+  await espera(200);
+  await emit(leo, 'voz:entrar', voz);
+  pl = await emit(leo, 'player:estado');
+  ok('sala vazia pausa e quem volta continua de onde parou', pl.fila.length === 1 && pl.tocando && Math.round(pl.pos) === 30);
+  await emit(ana, 'voz:entrar', voz);
 
   // mapa da chamada (cada sala de voz pode ter o seu)
   ok('sala sem mapa não tem mapa', (await emit(leo, 'mapa:estado')) === null);
