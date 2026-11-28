@@ -192,6 +192,48 @@
               <button type="button" id="ampliar-mapa" title="Ampliar o mapa"><span>Mapa · clique pra ampliar</span></button>
             </div>
             <div id="tira"></div>
+            <!-- player da call: o vídeo em si fica no #player-call-box (fora daqui, pra não recarregar) -->
+            <aside id="painel-player" hidden>
+              <header>
+                <h3>Player da call</h3>
+                <button type="button" class="btn-icone" id="btn-fechar-player" title="Esconder (continua tocando)" data-icone="fechar"></button>
+              </header>
+              <form id="form-player">
+                <input id="player-texto" maxlength="500" placeholder="Link do YouTube/Spotify ou nome da música" autocomplete="off">
+                <div class="acoes-form-player">
+                  <button class="btn-primario" title="Põe no fim da fila">Pôr na fila</button>
+                  <button type="button" class="btn-secundario" id="btn-tocar-agora" title="Toca já, antes do resto da fila">Tocar agora</button>
+                </div>
+              </form>
+              <div id="player-vazio">
+                <p>Nada tocando. Cole um vídeo, uma live ou uma playlist do YouTube, uma música, álbum ou playlist do Spotify, ou só escreva o nome da música.</p>
+                <p>Quem está na call ouve junto: se alguém pausa, pula ou volta, muda pra todo mundo.</p>
+              </div>
+              <div id="player-tocando" hidden>
+                <div id="slot-player"></div>
+                <div class="player-textos">
+                  <strong id="player-titulo"></strong>
+                  <span id="player-info"></span>
+                </div>
+                <div class="player-tempo">
+                  <span id="player-pos">0:00</span>
+                  <input type="range" id="player-barra" min="0" max="100" step="1" value="0" aria-label="Posição">
+                  <span id="player-dur">0:00</span>
+                </div>
+                <div class="player-botoes">
+                  <button type="button" class="btn-icone" id="btn-player-embaralhar" title="Embaralhar o resto da fila" data-icone="embaralhar"></button>
+                  <button type="button" class="btn-icone" id="btn-player-voltar" title="Voltar" data-icone="anterior"></button>
+                  <button type="button" class="btn-redondo" id="btn-player-tocar" title="Tocar/pausar pra todo mundo"></button>
+                  <button type="button" class="btn-icone" id="btn-player-pular" title="Pular" data-icone="proximo"></button>
+                  <label class="player-volume" title="Volume (só pra você)"><span data-icone="volume"></span><input type="range" id="player-volume" min="0" max="100" aria-label="Volume"></label>
+                </div>
+              </div>
+              <div class="player-fila-cabeca" id="player-fila-cabeca" hidden>
+                <h4 id="player-fila-titulo">Fila</h4>
+                <button type="button" class="btn-secundario" id="btn-player-limpar" title="Tira tudo menos a que está tocando">Limpar</button>
+              </div>
+              <ol id="player-fila"></ol>
+            </aside>
           </div>
           <div class="controles-chamada">
             <button class="btn-redondo btn-camera" title="Câmera" data-icone="camera"></button>
@@ -199,6 +241,7 @@
             <button class="btn-redondo btn-mudo" title="Silenciar"></button>
             <button class="btn-redondo" id="btn-tira" title="Esconder participantes" data-icone="membros" hidden></button>
             <button class="btn-redondo" id="btn-mapa" title="Voltar pro mapa" data-icone="mapa" hidden></button>
+            <button class="btn-redondo" id="btn-player" title="Player da call: YouTube e Spotify, todo mundo ouvindo junto" data-icone="playlist"></button>
             <button class="btn-redondo" id="btn-sons" title="Soundboard: tocar um som pra todo mundo da chamada" data-icone="sons"></button>
             <button class="btn-redondo" id="btn-times" title="Sortear times com quem está na chamada" data-icone="dado"></button>
             <button class="btn-redondo perigo btn-sair-voz" title="Desconectar" data-icone="desligar"></button>
@@ -569,6 +612,13 @@
     <iframe id="player-kick" title="Live da Kick" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen hidden></iframe>
     <button type="button" id="live-voltar"><span id="live-voltar-texto">Ao vivo · clique pra abrir</span></button>
     <button type="button" class="btn-icone" id="live-fechar" title="Parar de assistir" data-icone="fechar"></button>
+  </div>
+
+  <!-- player da call: fica num lugar só (não recarrega); em cima do #slot-player quando o painel está aberto -->
+  <div id="player-call-box" class="escondido">
+    <div id="player-call"></div>
+    <!-- o controle é o do painel (vale pra todo mundo): clicar no vídeo não pausa só pra você -->
+    <div class="player-capa"></div>
   </div>
 
   <div id="modal-live" class="modal" hidden>

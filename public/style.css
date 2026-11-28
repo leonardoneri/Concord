@@ -1645,3 +1645,53 @@ input[type=color] { width: 34px; height: 30px; padding: 2px; border: 0; border-r
 .srv-entrada select { flex: 1; padding: 7px 8px; background: #1e1f22; border-radius: 4px; }
 .linha-aberto { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .linha-aberto input { flex: none; }
+
+/* ---------- player da call (YouTube e Spotify, todo mundo junto) ---------- */
+#btn-player.tocando { color: var(--verde); }
+#grid.com-player { padding-right: 392px; }
+#painel-player { position: absolute; top: 16px; right: 16px; bottom: 0; width: 360px; display: flex; flex-direction: column; gap: 12px; padding: 12px; overflow-y: auto; background: var(--sidebar); border-radius: 8px; }
+#painel-player > header { display: flex; align-items: center; justify-content: space-between; }
+#painel-player h3 { margin: 0; font-size: 16px; color: var(--forte); }
+#form-player { display: grid; gap: 8px; }
+#player-texto { width: 100%; padding: 9px 10px; border: 0; border-radius: 4px; background: var(--input); color: var(--texto); font: inherit; font-size: 14px; }
+.acoes-form-player { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.acoes-form-player button { padding: 7px 10px; font-size: 13px; }
+#player-vazio p { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--texto-2); }
+#player-tocando { display: grid; gap: 8px; }
+#player-tocando[hidden] { display: none; }
+#slot-player { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 6px; }
+.player-textos { display: grid; min-width: 0; }
+#player-titulo { color: var(--forte); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#player-info { font-size: 12px; color: var(--texto-2); }
+.player-tempo { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--texto-2); font-variant-numeric: tabular-nums; }
+.player-tempo input { flex: 1; min-width: 0; accent-color: var(--acento); }
+.player-botoes { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.player-botoes .btn-redondo { width: 44px; height: 44px; background: var(--forte); color: #000; }
+.player-botoes .btn-redondo:hover { background: #fff; }
+.player-botoes .btn-redondo .ic { width: 20px; height: 20px; }
+.player-volume { display: flex; align-items: center; gap: 4px; margin-left: 6px; color: var(--texto-2); }
+.player-volume input { width: 72px; accent-color: var(--acento); }
+.player-fila-cabeca { display: flex; align-items: center; justify-content: space-between; }
+.player-fila-cabeca[hidden] { display: none; }
+.player-fila-cabeca h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .02em; color: var(--texto-2); }
+.player-fila-cabeca .btn-secundario { padding: 4px 10px; font-size: 12px; }
+#player-fila { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+#player-fila li { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border-radius: 4px; }
+#player-fila li:hover { background: var(--hover); }
+#player-fila li.atual { background: var(--ativo); }
+#player-fila li.atual .fila-nome { color: var(--forte); font-weight: 600; }
+#player-fila li.tocou { opacity: .55; }
+.fila-nome { flex: 1; min-width: 0; padding: 4px 0; text-align: left; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fila-tempo { flex: none; font-size: 12px; color: var(--texto-3); font-variant-numeric: tabular-nums; }
+#player-fila .btn-icone { opacity: 0; width: 24px; height: 24px; }
+#player-fila li:hover .btn-icone { opacity: 1; }
+#player-fila .btn-icone .ic { width: 14px; height: 14px; }
+#player-call-box { position: fixed; z-index: 5; background: #000; border-radius: 6px; overflow: hidden; }
+#player-call-box iframe, #player-call { width: 100%; height: 100%; border: 0; display: block; }
+.player-capa { position: absolute; inset: 0; }
+/* painel fechado: continua tocando, só não aparece */
+#player-call-box.escondido { left: -10000px; top: 0; width: 320px; height: 180px; pointer-events: none; }
+@media (max-width: 1100px) {
+  #painel-player { width: 300px; }
+  #grid.com-player { padding-right: 332px; }
+}

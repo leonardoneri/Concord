@@ -66,6 +66,12 @@ ICONES.arroba = '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-
 ICONES.chat = '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>';
 ICONES.mapa = '<path d="M14.1 6.4 9.9 4.2a2 2 0 0 0-1.8 0L3.6 6.4A1 1 0 0 0 3 7.3v12.1a1 1 0 0 0 1.4.9l3.7-1.9a2 2 0 0 1 1.8 0l4.2 2.2a2 2 0 0 0 1.8 0l4.5-2.2a1 1 0 0 0 .6-.9V4.6a1 1 0 0 0-1.4-.9l-3.7 1.9a2 2 0 0 1-1.8 0z"/><path d="M15 5.8v15M9 3.2v15"/>';
 ICONES.escudo = '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>';
+ICONES.playlist = '<path d="M3 6h12M3 12h12M3 18h7"/><path d="M15 15v6l5-3z"/>';
+ICONES.tocar = '<path fill="currentColor" d="M7 4v16l13-8z"/>';
+ICONES.pausa = '<path fill="currentColor" d="M6 4h4v16H6zM14 4h4v16h-4z"/>';
+ICONES.proximo = '<path fill="currentColor" d="M5 4v16l11-8z"/><path d="M19 5v14"/>';
+ICONES.anterior = '<path fill="currentColor" d="M19 4v16L8 12z"/><path d="M5 5v14"/>';
+ICONES.embaralhar = '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>';
 ICONES.micOff = ICONES.mic + CORTE;
 ICONES.foneOff = ICONES.fone + CORTE;
 
@@ -971,6 +977,7 @@ function render() {
   renderView();
   renderLive();
   renderGrid();
+  renderPlayer();
 }
 
 function avatar(u, { status = false } = {}) {
@@ -2465,6 +2472,7 @@ async function entrarVoz(canal) {
     for (const id of ids) if (!peers.has(id)) criarPeer(id);
     socket.emit('mapa:boneco', meuBonecoAgora());
     socket.emit('mapa:estado', null, aplicarMapa); // e o mapa, está ligado?
+    socket.emit('player:estado', null, aplicarPlayer); // e o que está tocando
   });
   enviarEstado();
   atalhosGlobais(true);
@@ -2479,6 +2487,7 @@ function sairVoz(avisarServidor = true) {
     estado[tipo]?.getTracks().forEach((t) => t.stop());
     estado[tipo] = null;
   }
+  pararSomDaJanela();
   if (estado.eu) pararMonitor(estado.eu.id);
   if (estado.voz) som('sair');
   clearTimeout(pttSoltar);
@@ -2489,6 +2498,7 @@ function sairVoz(avisarServidor = true) {
   estado.voz = null;
   estado.vozInfo = null;
   aplicarMapa(null);
+  aplicarPlayer(null);
   Object.assign(minhaRede, { ping: null, perda: null, ruinsSeguidas: 0, enviado: null });
   minhaRede.porPeer.clear();
   miniaturas(false);
@@ -4264,6 +4274,239 @@ $('#form-live').onsubmit = (e) => {
     carregarLives();
     render();
   });
+};
+
+// ---------- player da call: YouTube e Spotify, todo mundo da sala no mesmo ponto ----------
+// Quem manda é o servidor: guarda a fila, qual está tocando, se está pausado e em que segundo.
+// Aqui o player do YouTube só segue isso (e corrige se escorregar mais de 1,5 s). As faixas do Spotify
+// chegam já trocadas pela mesma música no YouTube.
+let playerCall = null; // estado do servidor: { fila, atual, tocando, pos, agora }
+let relogioCall = 0; // hora do servidor - a minha (pra saber onde a música está agora)
+let ytCall = null;
+let ytCallVideo = null;
+let ytCallPronto = false;
+let painelPlayer = false;
+let arrastandoBarra = false;
+let volumePlayer = lerStorage('volumePlayer', 60);
+const itemTocando = () => playerCall?.fila[playerCall.atual] ?? null;
+const posCall = () => !playerCall ? 0 : playerCall.pos + (playerCall.tocando ? (Date.now() + relogioCall - playerCall.agora) / 1000 : 0);
+const fmtTempo = (s) => {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+};
+// live do YouTube: não tem "segundo" pra sincronizar, só tocar/pausar
+const ehLiveCall = () => !!ytCallPronto && (ytCall.getVideoData?.()?.isLive || ytCall.getDuration?.() === 0);
+
+function aplicarPlayer(e) {
+  playerCall = e && estado.voz ? e : null;
+  if (playerCall) relogioCall = playerCall.agora - Date.now();
+  seguirPlayer();
+  renderPlayer();
+}
+socket.on('player', aplicarPlayer);
+socket.on('player:aviso', (msg) => avisar(`🎵 ${msg}`));
+socket.on('connect', () => { if (estado.voz) socket.emit('player:estado', null, aplicarPlayer); });
+
+// deixa o player do YouTube igual ao estado do servidor
+async function seguirPlayer() {
+  const item = itemTocando();
+  if (!item?.video) {
+    ytCallVideo = null;
+    if (ytCallPronto) ytCall.stopVideo();
+    return;
+  }
+  if (ytCallVideo !== item.video) {
+    ytCallVideo = item.video;
+    try {
+      await carregarYoutube();
+    } catch {
+      return avisar('Não consegui carregar o YouTube aqui (sem internet ou bloqueado).');
+    }
+    if (ytCallVideo !== item.video) return;
+    const inicio = Math.floor(posCall());
+    if (ytCall) {
+      if (ytCallPronto) ytCall[playerCall.tocando ? 'loadVideoById' : 'cueVideoById']({ videoId: item.video, startSeconds: inicio });
+      return;
+    }
+    ytCall = new YT.Player('player-call', {
+      videoId: item.video,
+      playerVars: { autoplay: playerCall.tocando ? 1 : 0, start: inicio, controls: 0, disablekb: 1, rel: 0, playsinline: 1, iv_load_policy: 3, origin: location.origin },
+      events: {
+        onReady: () => {
+          ytCallPronto = true;
+          aplicarSomPlayer();
+          corrigirPlayer();
+        },
+        onStateChange: (ev) => {
+          const it = itemTocando();
+          if (ev.data === YT.PlayerState.ENDED && it) socket.emit('player:fim', it.id);
+          if (ev.data === YT.PlayerState.PLAYING || ev.data === YT.PlayerState.PAUSED) corrigirPlayer();
+          renderPlayer();
+        },
+        // 2 = id errado, 5 = erro do player, 100 = não existe/privado, 101/150 = o dono não deixa tocar fora do YouTube
+        onError: (ev) => {
+          const it = itemTocando();
+          if (it && [2, 5, 100, 101, 150].includes(ev.data)) socket.emit('player:erro', { item: it.id, video: it.video });
+        },
+      },
+    });
+    return;
+  }
+  corrigirPlayer();
+}
+
+// tocando/pausado igual ao servidor e no mesmo segundo (com folga de 1,5 s, senão fica pulando)
+function corrigirPlayer() {
+  if (!ytCallPronto || !playerCall || !itemTocando()?.video) return;
+  const st = ytCall.getPlayerState();
+  if (playerCall.tocando) {
+    if (!ehLiveCall() && Math.abs(ytCall.getCurrentTime() - posCall()) > 1.5) ytCall.seekTo(posCall(), true);
+    if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.BUFFERING && st !== YT.PlayerState.ENDED) ytCall.playVideo();
+  } else {
+    if (st === YT.PlayerState.PLAYING || st === YT.PlayerState.BUFFERING) ytCall.pauseVideo();
+    if (!ehLiveCall() && Math.abs(ytCall.getCurrentTime() - posCall()) > 1) ytCall.seekTo(posCall(), true);
+  }
+}
+setInterval(corrigirPlayer, 2000);
+
+// surdo = player mudo; o volume é só seu
+function aplicarSomPlayer() {
+  if (!ytCallPronto) return;
+  ytCall.setVolume(volumePlayer);
+  if (estado.surdo) ytCall.mute();
+  else ytCall.unMute();
+}
+setInterval(aplicarSomPlayer, 1000);
+
+function acaoPlayer(tipo, extra = {}) {
+  socket.emit('player:acao', { tipo, ...extra }, (r) => r?.erro && avisar(r.erro));
+}
+
+function renderPlayer() {
+  const item = itemTocando();
+  const naCall = !!estado.voz;
+  if (!naCall) painelPlayer = false;
+  $('#btn-player').classList.toggle('ligado', painelPlayer);
+  $('#btn-player').classList.toggle('tocando', !!item && !!playerCall?.tocando && !painelPlayer);
+  $('#painel-player').hidden = !painelPlayer;
+  $('#grid').classList.toggle('com-player', painelPlayer);
+  $('#player-vazio').hidden = !!item;
+  $('#player-tocando').hidden = !item;
+  if (item) {
+    $('#player-titulo').textContent = item.titulo;
+    $('#player-titulo').title = item.titulo;
+    $('#player-info').textContent = `${item.origem === 'spotify' ? 'Spotify (tocando pelo YouTube)' : 'YouTube'} · pôs ${item.por}${item.video ? '' : ' · procurando…'}`;
+    const b = $('#btn-player-tocar');
+    b.replaceChildren(icone(playerCall.tocando ? 'pausa' : 'tocar'));
+    b.title = playerCall.tocando ? 'Pausar pra todo mundo' : 'Tocar pra todo mundo';
+  }
+  const fila = playerCall?.fila ?? [];
+  const resto = fila.length - Math.max(0, playerCall?.atual ?? 0) - 1;
+  $('#player-fila-cabeca').hidden = !fila.length;
+  $('#player-fila-titulo').textContent = resto > 0 ? `Próximas (${resto})` : 'Fila';
+  $('#player-fila').replaceChildren(...fila.map((x, i) => {
+    const li = el('li', i === playerCall.atual ? 'atual' : i < playerCall.atual ? 'tocou' : '');
+    const nome = el('button', 'fila-nome', x.titulo);
+    nome.type = 'button';
+    nome.title = `${x.titulo}\npôs ${x.por} · clique pra tocar agora`;
+    nome.onclick = () => acaoPlayer('ir', { item: x.id });
+    const tempo = el('span', 'fila-tempo', x.duracao ? fmtTempo(x.duracao) : '');
+    const tirar = el('button', 'btn-icone');
+    tirar.type = 'button';
+    tirar.title = 'Tirar da fila';
+    tirar.append(icone('fechar'));
+    tirar.onclick = () => acaoPlayer('remover', { item: x.id });
+    li.append(nome, tempo, tirar);
+    return li;
+  }));
+  // a que está tocando aparece no topo da lista visível
+  $('#player-fila .atual')?.scrollIntoView({ block: 'nearest' });
+  renderTempoPlayer();
+  posicionarPlayerCall();
+}
+
+function renderTempoPlayer() {
+  const item = itemTocando();
+  if (!painelPlayer || !item) return;
+  const live = ehLiveCall();
+  const dur = (ytCallPronto && ytCall.getDuration?.()) || item.duracao || 0;
+  const pos = Math.min(posCall(), dur || Infinity);
+  $('#player-barra').disabled = live || !dur;
+  if (!arrastandoBarra) {
+    $('#player-barra').max = Math.max(1, Math.floor(dur));
+    $('#player-barra').value = Math.floor(pos);
+  }
+  $('#player-pos').textContent = live ? 'AO VIVO' : fmtTempo(arrastandoBarra ? $('#player-barra').value : pos);
+  $('#player-dur').textContent = live ? '' : fmtTempo(dur);
+}
+setInterval(renderTempoPlayer, 500);
+
+// o vídeo fica em cima do espaço dele no painel; com o painel fechado, some (mas continua tocando)
+function posicionarPlayerCall() {
+  const box = $('#player-call-box');
+  const r = $('#slot-player').getBoundingClientRect();
+  const visivel = painelPlayer && !!itemTocando()?.video && r.width > 0 && estado.view === 'voz' && !estado.areaLive;
+  box.classList.toggle('escondido', !visivel);
+  Object.assign(box.style, visivel
+    ? { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` }
+    : { left: '', top: '', width: '', height: '' });
+}
+new ResizeObserver(posicionarPlayerCall).observe($('#slot-player'));
+addEventListener('resize', posicionarPlayerCall);
+$('#painel-player').addEventListener('scroll', posicionarPlayerCall);
+
+$('#btn-player').onclick = () => {
+  painelPlayer = !painelPlayer;
+  renderPlayer();
+  renderGrid();
+  if (painelPlayer && !itemTocando()) $('#player-texto').focus();
+};
+$('#btn-fechar-player').onclick = () => {
+  painelPlayer = false;
+  renderPlayer();
+  renderGrid();
+};
+
+function adicionarNoPlayer(agora) {
+  const texto = $('#player-texto').value.trim();
+  if (!texto) return $('#player-texto').focus();
+  const botoes = $$('#form-player button');
+  botoes.forEach((b) => (b.disabled = true));
+  socket.timeout(40000).emit('player:adicionar', { texto, agora }, (err, r) => {
+    botoes.forEach((b) => (b.disabled = false));
+    if (err) return avisar('Demorou demais pra achar. Tenta de novo.');
+    if (r?.erro) return avisar(r.erro);
+    $('#player-texto').value = '';
+    if (r.n > 1) avisar(`🎵 ${r.n} músicas na fila (${r.titulo})${r.cortou ? `. A fila encheu, o resto ficou de fora` : ''}`);
+  });
+}
+$('#form-player').onsubmit = (e) => {
+  e.preventDefault();
+  adicionarNoPlayer(false);
+};
+$('#btn-tocar-agora').onclick = () => adicionarNoPlayer(true);
+$('#btn-player-tocar').onclick = () => acaoPlayer(playerCall?.tocando ? 'pausar' : 'tocar');
+$('#btn-player-pular').onclick = () => acaoPlayer('pular');
+$('#btn-player-voltar').onclick = () => acaoPlayer('voltar');
+$('#btn-player-embaralhar').onclick = () => acaoPlayer('embaralhar');
+$('#btn-player-limpar').onclick = () => acaoPlayer('limpar');
+const barra = $('#player-barra');
+barra.oninput = () => {
+  arrastandoBarra = true;
+  renderTempoPlayer();
+};
+barra.onchange = () => {
+  arrastandoBarra = false;
+  acaoPlayer('buscar', { pos: Number(barra.value) });
+};
+$('#player-volume').value = volumePlayer;
+$('#player-volume').oninput = (e) => {
+  volumePlayer = Number(e.target.value);
+  salvarStorage('volumePlayer', volumePlayer);
+  aplicarSomPlayer();
 };
 
 // ---------- qualidade da conexão na chamada ----------
